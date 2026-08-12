@@ -1,0 +1,21 @@
+.env
+*.env
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.DS_Store
+.idea/
+.vscode/
+
+# Client data — never commit
+client_data/
+uploads/
+*.kml
+*.geojson
