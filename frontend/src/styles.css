@@ -217,7 +217,7 @@ button { font: inherit; cursor: pointer; }
 .verdict-strip__counts { margin-left: auto; display: flex; gap: 14px; }
 .verdict-strip__count { font-family: var(--mono); font-size: 11px; }
 
-.canvas { padding: 28px 32px 64px; max-width: 1360px; }
+.canvas { padding: 28px 32px 64px; max-width: 1100px; }
 
 .section { margin-bottom: 34px; }
 .section__head {
