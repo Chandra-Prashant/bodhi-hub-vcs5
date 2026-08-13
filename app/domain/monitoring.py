@@ -56,6 +56,7 @@ class Parameter:
     monitoring_frequency: str = ""
     qa_qc: str = ""
     calculation_method: str = ""
+    monitoring_equipment: str = ""
     justification: str = "N/A"
     comments: str = "None"
     citation: str = VMR0017_S9
@@ -309,3 +310,65 @@ def build_monitoring_parameters(
         embodied_ef_kg_per_mwh=ef,
         findings=findings,
     )
+
+
+# ---------------------------------------------------------------------------
+# Monitoring plan prose (VMR0017 s9.3 / ACM0002 para 83)
+# ---------------------------------------------------------------------------
+
+def monitoring_plan_sections(
+    technology: K.Technology,
+    has_bess: bool = False,
+) -> dict[str, list[str]]:
+    """Prose for the Monitoring section of the Project Description."""
+    plan = [
+        "Monitoring is undertaken in accordance with ACM0002 v22.0 Section 6 "
+        "as modified by VMR0017 v1.0 Section 9.3. Net electricity supplied to "
+        "the grid (EGfacility,y and EGPJ_Add,y) is determined in accordance "
+        "with the monitored parameter tables in VMR0017 Section 9.2. The "
+        "combined margin grid emission factor EFgrid,CM,y is determined in "
+        "accordance with VT0011, and any fossil fuel combustion emissions "
+        "PEFF,y in accordance with TOOL03.",
+        "Electricity export is metered continuously at the grid interface. "
+        "Meter readings are recorded and aggregated at least monthly, and "
+        "cross-checked against utility settlement statements and invoices for "
+        "the corresponding period. Where meter reading dates do not coincide "
+        "with the boundaries of the monitoring period, linear interpolation is "
+        "applied.",
+        "Meters are tested and calibrated in accordance with utility or "
+        "national requirements and manufacturer specifications. Measurement "
+        "uncertainty is taken from the error recorded at the most recent "
+        "calibration event, or from the manufacturer's specification where no "
+        "previous calibration record exists, and is propagated in accordance "
+        "with ACM0002 and VMR0017.",
+        "All monitoring records, calibration certificates and settlement "
+        "statements are retained for at least two years after the end of the "
+        "crediting period or the last issuance of credits, whichever is later, "
+        "in accordance with the VCS Program record-keeping requirements.",
+    ]
+
+    if has_bess:
+        plan.append(
+            "The battery energy storage system is fitted with a fire "
+            "suppression system whose activation log records every agent "
+            "release event, including fire events, accidental discharge during "
+            "maintenance, leakage from equipment failure, false alarms, and "
+            "drills or testing. The mass released at each event is determined "
+            "by weighing the cylinders before and after using calibrated "
+            "equipment. Where the released quantity cannot be reliably "
+            "determined, the full charged mass of the affected system is "
+            "conservatively assumed to have been released.")
+
+    return {
+        "Monitoring Plan": plan,
+        "Monitoring Personnel": [
+            "The project proponent's operations and maintenance team is "
+            "responsible for the routine reading, recording and retention of "
+            "metered generation data. A designated monitoring manager is "
+            "responsible for data aggregation, quality control, calibration "
+            "scheduling, and preparation of the monitoring report. Personnel "
+            "responsible for each monitored parameter, together with their "
+            "roles and required competencies, are to be named by the project "
+            "proponent before validation.",
+        ],
+    }

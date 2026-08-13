@@ -22,6 +22,7 @@ from app.domain.additionality import AdditionalityResult, AdditionalityVerdict
 from app.domain.baseline import EmissionReductionResult
 from app.domain.classification import Classification, Finding, ProjectIntake, Severity
 from app.domain.emission_factors import EmissionFactorResult
+from app.domain.monitoring import MonitoringParameters, monitoring_plan_sections
 from app.domain.pdd_applicability import not_applicable_sections
 
 DATE_FMT = "%d-%b-%Y"
@@ -60,6 +61,7 @@ class PDDContent:
     fields: dict[str, str]
     sections: dict[str, list[str]]
     annual_estimates: list[AnnualEstimate]
+    monitoring: MonitoringParameters | None = None
     findings: list[Finding] = field(default_factory=list)
 
     @property
@@ -316,6 +318,7 @@ def build_sections(
     ef: EmissionFactorResult | None,
     er: EmissionReductionResult | None,
     add: AdditionalityResult | None,
+    monitoring: MonitoringParameters | None = None,
 ) -> dict[str, list[str]]:
     """Template heading text -> replacement paragraphs."""
     sections: dict[str, list[str]] = {
@@ -349,6 +352,11 @@ def build_sections(
             "regulatory framework that is systematically enforced in the host "
             "country. Regulatory surplus is therefore demonstrated."
         ]
+
+    if monitoring is not None:
+        sections.update(monitoring_plan_sections(
+            intake.technology,
+            has_bess=any(p.name == "Me,released,y" for p in monitoring.monitored)))
 
     # Not-applicable sections are merged LAST but must never overwrite drafted
     # content, so anything already present wins.
@@ -395,6 +403,7 @@ def build_pdd_content(
     ef: EmissionFactorResult | None = None,
     er: EmissionReductionResult | None = None,
     add: AdditionalityResult | None = None,
+    monitoring: MonitoringParameters | None = None,
 ) -> PDDContent:
     identity = identity or ProjectIdentity()
     findings: list[Finding] = []
@@ -427,6 +436,15 @@ def build_pdd_content(
             f"Additionality verdict is {add.verdict.value}. A PDD asserting "
             f"additionality must not be issued on this basis.", "VT0008 v1.0"))
 
+    if monitoring is None:
+        findings.append(Finding(
+            "pdd.monitoring", Severity.FAIL,
+            "No monitoring parameters supplied. The Monitoring section and "
+            "Appendix 2 (Data and Parameters) cannot be completed.",
+            "VMR0017 v1.0 s9"))
+    else:
+        findings.extend(monitoring.findings)
+
     if er is not None:
         findings.append(Finding(
             "pdd.annual_estimates", Severity.WARNING,
@@ -441,7 +459,8 @@ def build_pdd_content(
     return PDDContent(
         template_version=classification.template_version,
         fields=build_fields(intake, classification, identity),
-        sections=build_sections(intake, classification, ef, er, add),
+        sections=build_sections(intake, classification, ef, er, add, monitoring),
         annual_estimates=build_annual_estimates(classification, er),
+        monitoring=monitoring,
         findings=findings,
     )

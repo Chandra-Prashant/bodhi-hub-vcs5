@@ -76,6 +76,18 @@ def build_pdd(
     sections_written, sections_missing = docx_filler.fill_sections(
         doc, content.sections)
 
+    if content.monitoring is not None:
+        counts = docx_filler.fill_parameter_tables(
+            doc, content.monitoring.at_validation, content.monitoring.monitored)
+        if counts["at_validation"] == 0 or counts["monitored"] == 0:
+            findings.append(Finding(
+                "pdd.parameter_tables", Severity.WARNING,
+                f"Appendix 2 rendering incomplete: "
+                f"{counts['at_validation']} at-validation and "
+                f"{counts['monitored']} monitored parameter tables written. "
+                f"Check the template's Data/Parameter table layout.",
+                source.name))
+
     if content.annual_estimates:
         if not docx_filler.fill_estimates_table(doc, content.annual_estimates):
             findings.append(Finding(

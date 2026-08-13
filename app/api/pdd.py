@@ -14,6 +14,7 @@ from app.domain.additionality import FinancialInputs, assess_additionality
 from app.domain.baseline import ProjectEmissions, emission_reductions
 from app.domain.classification import ProjectIntake, classify
 from app.domain.emission_factors import PowerUnit, grid_emission_factor
+from app.domain.monitoring import build_monitoring_parameters
 from app.domain.pdd_content import ProjectIdentity, build_pdd_content
 from app.schemas.pdd import PDDBuildRequest, PDDBuildResponse
 from app.services.pdd_builder import build_pdd
@@ -55,14 +56,19 @@ def _assemble(payload: PDDBuildRequest):
         units, intake.technology, intake.crediting_period_ordinal,
         om_method=payload.om_method) if units else None
 
+    monitoring = build_monitoring_parameters(
+        intake.technology, has_bess=payload.has_bess)
+
     er = None
     if ef is not None:
         er = emission_reductions(
             intake.expected_annual_generation_mwh, ef.ef_grid_cm,
             project_emissions=ProjectEmissions(**payload.project_emissions.model_dump())
             if payload.project_emissions else None,
-            eg_facility_mwh=payload.eg_facility_mwh,
+            eg_facility_mwh=payload.eg_facility_mwh
+                or intake.expected_annual_generation_mwh,
             ef_embodied_kg_per_mwh=payload.ef_embodied_kg_per_mwh,
+            technology=intake.technology,
         )
 
     add = None
@@ -79,7 +85,8 @@ def _assemble(payload: PDDBuildRequest):
 
     identity = ProjectIdentity(**payload.identity.model_dump()) if payload.identity \
         else ProjectIdentity()
-    return build_pdd_content(intake, classification, identity, ef, er, add)
+    return build_pdd_content(intake, classification, identity, ef, er, add,
+                             monitoring=monitoring)
 
 
 @router.post("/preview", response_model=PDDBuildResponse)

@@ -259,3 +259,110 @@ def strip_instructions(doc: Document) -> int:
             _delete_paragraph(p)
             removed += 1
     return removed
+
+
+# ---------------------------------------------------------------------------
+# Appendix 2 — Data and Parameters
+# ---------------------------------------------------------------------------
+#
+# The template ships ONE blank Data/Parameter table for A2.1 and one for A2.2.
+# Each parameter needs its own, so the blank is cloned per parameter and the
+# original removed. Tables are located by their row-label signature rather than
+# by index: index-based lookup breaks silently the first time Verra reissues
+# the template with a section inserted above.
+
+_AT_VALIDATION_KEYS = {"data/parameter name", "data/parameter"}
+_MONITORED_MARKER = "frequency of monitoring/recording"
+
+_ROW_MAP = {
+    "data/parameter name": "name",
+    "data/parameter": "name",
+    "data unit": "unit",
+    "description": "description",
+    "equation number": "equations",
+    "equation number#": "equations",
+    "source of data": "source_of_data",
+    "value applied": "value_applied",
+    "justification of value applied": "justification",
+    "description of measurement methods and procedures to be applied":
+        "measurement_methods",
+    "frequency of monitoring/recording": "monitoring_frequency",
+    "monitoring equipment": "monitoring_equipment",
+    "qa/qc procedures to be applied": "qa_qc",
+    "purpose of data": "purpose",
+    "calculation method": "calculation_method",
+    "comments": "comments",
+}
+
+
+def _table_signature(table: Table) -> tuple[str, ...]:
+    return tuple(r.cells[0].text.strip().lower()
+                 for r in table.rows if len(r.cells) >= 2)
+
+
+def _find_parameter_tables(doc: Document) -> tuple[Table | None, Table | None]:
+    at_validation = monitored = None
+    for table in doc.tables:
+        sig = _table_signature(table)
+        if not sig or sig[0] not in _AT_VALIDATION_KEYS:
+            continue
+        if _MONITORED_MARKER in sig:
+            monitored = monitored or table
+        else:
+            at_validation = at_validation or table
+    return at_validation, monitored
+
+
+def _fill_parameter_table(table: Table, parameter) -> None:
+    for row in table.rows:
+        if len(row.cells) < 2:
+            continue
+        label = row.cells[0].text.strip().lower()
+        attr = _ROW_MAP.get(label)
+        if attr is None:
+            continue
+        value = getattr(parameter, attr, "")
+        if value:
+            _set_cell_value(row.cells[1], str(value))
+
+
+def _clone_table_after(table: Table) -> Table:
+    """Copy a table and insert it after the original, with a spacer paragraph.
+
+    Word merges directly adjacent tables into one, so the empty paragraph
+    between them is structural, not cosmetic.
+    """
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    spacer = OxmlElement("w:p")
+    table._tbl.addnext(spacer)
+    new_tbl = copy.deepcopy(table._tbl)
+    spacer.addnext(new_tbl)
+    return Table(new_tbl, table._parent)
+
+
+def fill_parameter_tables(
+    doc: Document,
+    at_validation: list,
+    monitored: list,
+) -> dict[str, int]:
+    """Render one Data/Parameter table per parameter in Appendix 2."""
+    written = {"at_validation": 0, "monitored": 0}
+    av_template, mon_template = _find_parameter_tables(doc)
+
+    for template, params, key in (
+        (av_template, at_validation, "at_validation"),
+        (mon_template, monitored, "monitored"),
+    ):
+        if template is None or not params:
+            continue
+        anchor = template
+        for parameter in params:
+            clone = _clone_table_after(anchor)
+            _fill_parameter_table(clone, parameter)
+            anchor = clone
+            written[key] += 1
+        template._tbl.getparent().remove(template._tbl)
+
+    return written

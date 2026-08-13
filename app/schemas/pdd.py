@@ -71,10 +71,12 @@ class PDDBuildRequest(BaseModel):
     om_method: OMMethod = OMMethod.SIMPLE
     project_emissions: ProjectEmissionsIn | None = None
     eg_facility_mwh: float | None = None
+    # Leave None to apply the VMR0017 s9.1 default for the technology.
     ef_embodied_kg_per_mwh: float | None = None
     financials: FinancialsIn | None = None
     similar_projects_all: int = Field(default=0, ge=0)
     similar_projects_distinct: int = Field(default=0, ge=0)
+    has_bess: bool = False
     regulatory_surplus: bool = True
     strip_guidance: bool = False
     allow_incomplete: bool = False
