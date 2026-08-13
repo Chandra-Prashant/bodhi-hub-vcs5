@@ -19,3 +19,4 @@ client_data/
 uploads/
 *.kml
 *.geojson
+out/

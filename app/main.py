@@ -3,12 +3,12 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, classification
+from app.api import auth, classification, pdd
 from app.core.config import settings
 
 app = FastAPI(
     title=settings.APP_NAME,
-    version="0.2.0",
+    version="0.3.0",
     description=(
         "Verra VCS v5.0 project design platform for grid-connected solar and "
         "wind. Calculations are deterministic and clause-cited; the language "
@@ -29,6 +29,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 app.include_router(auth.admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(classification.router, prefix=settings.API_V1_PREFIX)
+app.include_router(pdd.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/health", tags=["ops"])
