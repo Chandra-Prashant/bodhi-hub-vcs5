@@ -16,6 +16,8 @@ from __future__ import annotations
 import getpass
 import sys
 
+from pydantic import BaseModel, EmailStr, ValidationError
+
 from sqlalchemy import select
 
 from app.core.database import SessionLocal
@@ -25,8 +27,20 @@ from app.models.user import Role, User
 
 def main() -> int:
     email = input("Admin email: ").strip().lower()
-    if not email or "@" not in email:
-        print("A valid email address is required.", file=sys.stderr)
+    # Validate with the SAME rule the login endpoint uses. A looser check here
+    # creates an admin the API will then refuse to authenticate — for example
+    # anything on a reserved TLD such as .test or .local, which EmailStr
+    # rejects but a bare "@" check accepts.
+    class _Check(BaseModel):
+        email: EmailStr
+
+    try:
+        _Check(email=email)
+    except ValidationError as exc:
+        reason = exc.errors()[0]["msg"]
+        print(f"Not a usable email address: {reason}", file=sys.stderr)
+        print("The login endpoint applies the same rule, so this account "
+              "would be unable to sign in.", file=sys.stderr)
         return 1
 
     full_name = input("Full name: ").strip()

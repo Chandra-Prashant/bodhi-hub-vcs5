@@ -1,0 +1,472 @@
+/* ==========================================================================
+   Bodhi Hub — VCS v5.0 Project Register
+
+   Design direction: a verifier's working register. The product's thesis is
+   that every figure traces to a clause, so the citation is the ornament —
+   set in mono, running down a spine on the right edge of every claim. Dense,
+   ruled, calibrated. No cards, no shadows, no gradient statistics.
+
+   Palette
+     ink     #131720   deep blue-black — rail and header
+     carbon  #1E242F   raised surface on dark
+     mist    #EDF0F4   cool paper (deliberately not a warm cream)
+     chalk   #FFFFFF
+     flux    #4838D1   violet-indigo — the one accent
+     pass    #12795B   warn #A25E00   fail #A5231C   inert #6E7787
+
+   Type
+     Bricolage Grotesque  display, used with restraint
+     IBM Plex Sans        body
+     IBM Plex Mono        every number, code and clause reference
+   ========================================================================== */
+
+:root {
+  --ink: #131720;
+  --carbon: #1e242f;
+  --steel: #3a4453;
+  --mist: #edf0f4;
+  --chalk: #ffffff;
+  --flux: #4838d1;
+  --flux-soft: #ece9fb;
+
+  --pass: #12795b;
+  --warn: #a25e00;
+  --fail: #a5231c;
+  --inert: #6e7787;
+
+  --rule: #d5dce4;
+  --rule-strong: #b3bec9;
+
+  --display: "Bricolage Grotesque", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --rail-w: 232px;
+  --step: 8px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--mist);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; cursor: pointer; }
+
+:focus-visible {
+  outline: 2px solid var(--flux);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* --- shared atoms ------------------------------------------------------- */
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--inert);
+}
+
+.clause {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--inert);
+  white-space: nowrap;
+}
+
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.dot--pass { background: var(--pass); }
+.dot--warn { background: var(--warn); }
+.dot--fail { background: var(--fail); }
+.dot--inert { background: var(--inert); }
+
+/* --- shell -------------------------------------------------------------- */
+
+.shell { display: flex; min-height: 100%; }
+
+.rail {
+  width: var(--rail-w);
+  flex: none;
+  background: var(--ink);
+  color: #aab4c2;
+  padding: 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.rail__mark {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+  color: var(--chalk);
+  line-height: 1.15;
+}
+.rail__mark span { display: block; font-size: 10px; font-family: var(--mono);
+  font-weight: 500; letter-spacing: 0.16em; color: #6c7787; margin-top: 6px; }
+
+.rail__group { display: flex; flex-direction: column; gap: 2px; }
+.rail__label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: #5c6675; margin-bottom: 8px; }
+
+.rail__item {
+  display: flex; align-items: center; gap: 9px;
+  background: none; border: 0; width: 100%;
+  padding: 7px 9px; border-radius: 5px;
+  color: #aab4c2; text-align: left; font-size: 13px;
+  transition: background 0.14s, color 0.14s;
+}
+.rail__item:hover { background: #1c2230; color: var(--chalk); }
+.rail__item[aria-current="true"] { background: var(--flux); color: var(--chalk); }
+.rail__item[aria-current="true"] .rail__idx { color: #cfc9f6; }
+
+.rail__idx { font-family: var(--mono); font-size: 10px; color: #5c6675; width: 14px; }
+
+.rail__foot { margin-top: auto; border-top: 1px solid #262d3a; padding-top: 16px; }
+.rail__stat { display: flex; justify-content: space-between; gap: 8px;
+  font-family: var(--mono); font-size: 11px; color: #7b8593; padding: 3px 0; }
+.rail__stat b { color: var(--chalk); font-weight: 500; }
+
+.rail__signout {
+  margin-top: 12px; width: 100%;
+  background: none; border: 1px solid #2c3442; color: #7b8593;
+  padding: 7px 10px; border-radius: 4px;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  transition: border-color 0.14s, color 0.14s;
+}
+.rail__signout:hover { border-color: var(--fail); color: #e8827c; }
+
+.main { flex: 1; min-width: 0; }
+
+.topbar {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 16px; padding: 20px 32px; background: var(--chalk);
+  border-bottom: 1px solid var(--rule);
+  position: sticky; top: 0; z-index: 5;
+}
+.topbar h1 {
+  font-family: var(--display); font-weight: 700; font-size: 21px;
+  letter-spacing: -0.02em; margin: 0;
+}
+.topbar__meta { display: flex; gap: 18px; align-items: baseline; }
+
+/* The figure a client asks for first. It belongs on every screen, not buried
+   on the quantification tab — but it stays subordinate to the verdict, which
+   is what actually determines whether the credits exist. */
+.topbar__yield {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  padding-left: 18px; border-left: 1px solid var(--rule);
+}
+.topbar__yield b {
+  font-family: var(--mono); font-size: 16px; font-weight: 600;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+}
+.topbar__yield span { font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--inert); }
+
+/* Condensed verdict for views other than the register: the state stays
+   visible without spending the fold on it a second time. */
+.verdict-strip {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: var(--chalk); border: 1px solid var(--rule);
+  border-left: 3px solid var(--ink);
+  padding: 11px 16px; margin-bottom: 26px;
+}
+.verdict-strip--ready { border-left-color: var(--pass); }
+.verdict-strip--blocked { border-left-color: var(--fail); }
+.verdict-strip__state {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase;
+}
+.verdict-strip--ready .verdict-strip__state { color: var(--pass); }
+.verdict-strip--blocked .verdict-strip__state { color: var(--fail); }
+.verdict-strip__text { font-size: 13px; color: var(--steel); }
+.verdict-strip__counts { margin-left: auto; display: flex; gap: 14px; }
+.verdict-strip__count { font-family: var(--mono); font-size: 11px; }
+
+.canvas { padding: 28px 32px 64px; max-width: 1360px; }
+
+.section { margin-bottom: 34px; }
+.section__head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; padding-bottom: 9px; margin-bottom: 0;
+  border-bottom: 2px solid var(--ink);
+}
+.section__head h2 {
+  font-family: var(--display); font-size: 15px; font-weight: 700;
+  letter-spacing: -0.01em; margin: 0;
+}
+
+/* --- verdict: the signature block --------------------------------------- */
+/*
+   Rendered as a stamped audit mark rather than a statistic. The reading order
+   is verdict, then the count of what stands in its way, then the calibration
+   strip. The number of tonnes is deliberately NOT the hero: a tCO2e figure
+   nobody can defend is worth nothing, which is the whole argument of the
+   product.
+*/
+
+.verdict {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(280px, 420px);
+  gap: 0;
+  background: var(--chalk);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--ink);
+  margin-bottom: 34px;
+}
+.verdict--ready { border-left-color: var(--pass); }
+.verdict--blocked { border-left-color: var(--fail); }
+
+.verdict__body {
+  padding: 26px 28px;
+  display: flex; flex-direction: column; justify-content: center;
+}
+
+.verdict__stamp {
+  display: inline-flex; align-items: center; gap: 10px;
+  /* The body is a flex column, so without this the stamp stretches to the
+     full width and the rotation turns it into a visible trapezoid. */
+  align-self: flex-start;
+  border: 2px solid currentColor; border-radius: 2px;
+  padding: 5px 12px; margin-bottom: 16px;
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  transform: rotate(-1.2deg);
+}
+.verdict--ready .verdict__stamp { color: var(--pass); }
+.verdict--blocked .verdict__stamp { color: var(--fail); }
+
+.verdict__line {
+  font-family: var(--display);
+  font-size: clamp(26px, 3.4vw, 40px);
+  font-weight: 800; letter-spacing: -0.035em; line-height: 1.05;
+  margin: 0 0 12px;
+}
+.verdict__sub { color: var(--steel); max-width: 46ch; margin: 0; }
+
+.verdict__ticks {
+  border-left: 1px solid var(--rule);
+  padding: 26px 28px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.tick { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: baseline; }
+.tick__bar { grid-column: 1 / -1; height: 3px; background: var(--mist); }
+.tick__fill { height: 100%; }
+.tick__label { font-size: 12px; color: var(--steel); }
+.tick__value { font-family: var(--mono); font-weight: 600; font-size: 13px; }
+
+/* --- ledger ------------------------------------------------------------- */
+
+.grid2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+
+.ledger { background: var(--chalk); border: 1px solid var(--rule); }
+
+.ledger__row {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: baseline;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--rule);
+}
+.ledger__row:last-child { border-bottom: 0; }
+.ledger__row:hover { background: #fafbfd; }
+
+.ledger__title { font-size: 13px; margin: 0; }
+.ledger__note { font-size: 12px; color: var(--steel); margin: 3px 0 0; }
+
+.ledger__status {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap;
+}
+.st--satisfied { color: var(--pass); }
+.st--needs_input { color: var(--warn); }
+.st--failed { color: var(--fail); }
+.st--not_applicable { color: var(--inert); }
+
+.ledger__spine {
+  grid-column: 2 / -1;
+  margin-top: 5px;
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  align-items: baseline;
+}
+
+/* --- gaps --------------------------------------------------------------- */
+
+.gap {
+  background: var(--chalk); border: 1px solid var(--rule);
+  border-left: 3px solid var(--inert);
+  padding: 12px 15px; margin-bottom: 9px;
+}
+.gap--blocker { border-left-color: var(--fail); }
+.gap--required { border-left-color: var(--warn); }
+.gap--review { border-left-color: var(--flux); }
+
+.gap__head { display: flex; justify-content: space-between; gap: 10px;
+  align-items: baseline; margin-bottom: 5px; }
+.gap__pri {
+  font-family: var(--mono); font-size: 9px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase;
+}
+.gap--blocker .gap__pri { color: var(--fail); }
+.gap--required .gap__pri { color: var(--warn); }
+.gap--review .gap__pri { color: var(--flux); }
+
+.gap__area { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+.gap__detail { font-size: 12px; color: var(--steel); margin: 0; }
+
+/* --- quantification: the derivation chain ------------------------------- */
+
+.derive { background: var(--chalk); border: 1px solid var(--rule); }
+
+.derive__row {
+  display: grid; grid-template-columns: 1fr auto;
+  gap: 14px; align-items: baseline;
+  padding: 13px 18px; border-bottom: 1px solid var(--rule);
+}
+.derive__row:last-child { border-bottom: 0; }
+.derive__row--total { background: var(--ink); color: var(--chalk); }
+.derive__row--total .derive__label { color: #aab4c2; }
+.derive__row--total .clause { color: #7b8593; }
+
+.derive__label { font-size: 13px; }
+.derive__value { font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-weight: 600; font-size: 15px; }
+.derive__work {
+  grid-column: 1 / -1; margin-top: 6px;
+  font-family: var(--mono); font-size: 11px; color: var(--steel);
+  background: var(--mist); padding: 7px 10px; border-radius: 3px;
+  overflow-x: auto; white-space: nowrap;
+}
+.derive__row--total .derive__work { background: #232a36; color: #9aa4b2; }
+
+/* --- form --------------------------------------------------------------- */
+
+.form { background: var(--chalk); border: 1px solid var(--rule); padding: 22px 24px; }
+.form__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--inert); }
+.field input, .field select {
+  font: inherit; font-family: var(--mono); font-size: 13px;
+  padding: 8px 10px; border: 1px solid var(--rule-strong);
+  border-radius: 3px; background: var(--chalk); color: var(--ink);
+}
+.field input:focus, .field select:focus { border-color: var(--flux); outline: none;
+  box-shadow: 0 0 0 3px var(--flux-soft); }
+.field__hint { font-size: 11px; color: var(--inert); }
+
+.btn {
+  border: 1px solid var(--ink); background: var(--ink); color: var(--chalk);
+  padding: 9px 18px; border-radius: 3px;
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  transition: background 0.14s, border-color 0.14s;
+}
+.btn:hover { background: var(--flux); border-color: var(--flux); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn--ghost { background: transparent; color: var(--ink); }
+.btn--ghost:hover { background: var(--ink); color: var(--chalk); }
+
+.actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px;
+  padding-top: 18px; border-top: 1px solid var(--rule); }
+
+/* --- login -------------------------------------------------------------- */
+
+.login {
+  min-height: 100vh; display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 460px);
+  background: var(--ink);
+}
+.login__pitch {
+  padding: 8vh 6vw; color: #aab4c2; display: flex;
+  flex-direction: column; justify-content: center; gap: 22px;
+}
+.login__pitch h1 {
+  font-family: var(--display); font-size: clamp(30px, 4.4vw, 54px);
+  font-weight: 800; letter-spacing: -0.04em; line-height: 1.02;
+  color: var(--chalk); margin: 0; max-width: 15ch;
+}
+.login__pitch p { max-width: 46ch; margin: 0; }
+.login__cites { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.login__cite {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em;
+  border: 1px solid #2c3442; color: #7b8593;
+  padding: 4px 9px; border-radius: 2px;
+}
+.login__panel {
+  background: var(--chalk); padding: 8vh 44px;
+  display: flex; flex-direction: column; justify-content: center; gap: 18px;
+}
+.login__panel h2 { font-family: var(--display); font-size: 20px; margin: 0; }
+
+.alert {
+  border-left: 3px solid var(--fail); background: #fdf3f2;
+  padding: 10px 13px; font-size: 12px; color: var(--fail);
+}
+
+.empty {
+  border: 1px dashed var(--rule-strong); background: var(--chalk);
+  padding: 40px 28px; text-align: center; color: var(--steel);
+}
+.empty h3 { font-family: var(--display); font-size: 16px; margin: 0 0 6px; color: var(--ink); }
+
+/* --- responsive --------------------------------------------------------- */
+
+@media (max-width: 1080px) {
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+  .verdict { grid-template-columns: minmax(0, 1fr); }
+  .verdict__ticks { border-left: 0; border-top: 1px solid var(--rule); }
+}
+
+@media (max-width: 780px) {
+  .shell { flex-direction: column; }
+  .rail { width: 100%; height: auto; position: static; flex-direction: row;
+    flex-wrap: wrap; gap: 14px; align-items: center; }
+  .rail__foot { display: none; }
+  .rail__group { flex-direction: row; flex-wrap: wrap; }
+  .rail__label { display: none; }
+  .canvas, .topbar { padding-left: 18px; padding-right: 18px; }
+  .login { grid-template-columns: minmax(0, 1fr); }
+  .login__pitch { padding: 6vh 24px 0; }
+  .login__panel { padding: 5vh 24px 8vh; }
+}
