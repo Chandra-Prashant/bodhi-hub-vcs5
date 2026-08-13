@@ -53,6 +53,13 @@ export const api = {
   traceabilityCsv: (payload) =>
     request("/assessment/traceability.csv", { method: "POST", body: payload, raw: true }),
   regulatoryStatus: () => request("/assessment/regulatory-status"),
+  documentStatus: (payload) =>
+    request("/assessment/document-status", { method: "POST", body: payload }),
+  projectDescription: (payload, stripGuidance = false) =>
+    request(
+      `/assessment/project-description?strip_guidance=${stripGuidance}`,
+      { method: "POST", body: payload, raw: true }
+    ),
 };
 
 export function downloadBlob(blob, filename) {

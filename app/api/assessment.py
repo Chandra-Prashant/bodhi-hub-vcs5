@@ -11,9 +11,12 @@ different set of inputs than the reductions figure beside it.
 from __future__ import annotations
 
 import io
+import tempfile
+import uuid
+from pathlib import Path
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.api.deps import get_current_user
 from app.domain.additionality import FinancialInputs, assess_additionality
@@ -23,9 +26,11 @@ from app.domain.compliance import build_compliance_report, traceability_csv
 from app.domain.emission_factors import PowerUnit, grid_emission_factor
 from app.domain.esg import RiskCategory, RiskEntry, assess_esg
 from app.domain.monitoring import build_monitoring_parameters
+from app.domain.pdd_content import ProjectIdentity, build_pdd_content
 from app.domain.regulatory import check_registry
 from app.schemas.assessment import AssessmentRequest, AssessmentResponse
 from app.services.auditor import audit
+from app.services.pdd_builder import build_pdd
 
 router = APIRouter(prefix="/assessment", tags=["Assessment"])
 
@@ -142,3 +147,82 @@ def regulatory_status(_user=Depends(get_current_user)) -> dict:
             for f in findings
         ]
     }
+
+
+# ---------------------------------------------------------------------------
+# Project Description
+# ---------------------------------------------------------------------------
+#
+# The document is the deliverable; everything above it is the evidence that the
+# document can be defended. Both are produced from the same inputs in the same
+# request, so the figures in the .docx cannot drift from the figures on screen.
+
+DOCX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
+def _pdd_content(payload: AssessmentRequest):
+    intake, classification, ef, er, add, monitoring, esg, _report, _audit = _run(payload)
+    return build_pdd_content(
+        intake, classification,
+        ProjectIdentity(prepared_by=payload.proponent),
+        ef, er, add, monitoring=monitoring)
+
+
+@router.post("/document-status")
+def document_status(
+    payload: AssessmentRequest,
+    _user=Depends(get_current_user),
+) -> dict:
+    """What the generated Project Description would contain, and what a person
+    still has to write into it."""
+    content = _pdd_content(payload)
+    with tempfile.TemporaryDirectory() as tmp:
+        result = build_pdd(content, Path(tmp) / "preview.docx")
+    return {
+        "template_used": result.template_used,
+        "blocked": content.blocked,
+        "fields_written": len(result.report.fields_written),
+        "sections_drafted": result.report.sections_written,
+        "sections_needing_input": result.sections_needing_input,
+        "total_guidance_blocks_remaining": sum(
+            result.report.instructions_remaining.values()),
+        "findings": [
+            {"check": f.check, "severity": f.severity.value,
+             "message": f.message, "source": f.source}
+            for f in result.findings
+        ],
+    }
+
+
+@router.post("/project-description")
+def project_description(
+    payload: AssessmentRequest,
+    strip_guidance: bool = False,
+    allow_incomplete: bool = False,
+    _user=Depends(get_current_user),
+):
+    """Render the Project Description as a .docx.
+
+    Refuses when the assembled content is blocked. A document asserting
+    eligibility or additionality that the engine has rejected must not leave
+    the system, whatever the caller asks for.
+    """
+    content = _pdd_content(payload)
+    if content.blocked and not allow_incomplete:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Project Description blocked by unresolved findings.",
+                "findings": [
+                    {"check": f.check, "message": f.message, "source": f.source}
+                    for f in content.findings if f.severity.value == "FAIL"
+                ],
+            })
+
+    out_dir = Path(tempfile.gettempdir()) / "bodhi-pdd" / str(uuid.uuid4())
+    filename = (f"VCS_PD_{payload.name.replace(' ', '_')}_"
+                f"{content.template_version.value}.docx")
+    result = build_pdd(content, out_dir / filename, strip_guidance=strip_guidance)
+    return FileResponse(path=str(result.output_path),
+                        media_type=DOCX_MEDIA_TYPE, filename=filename)

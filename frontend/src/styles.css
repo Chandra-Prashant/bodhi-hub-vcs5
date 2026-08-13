@@ -217,7 +217,7 @@ button { font: inherit; cursor: pointer; }
 .verdict-strip__counts { margin-left: auto; display: flex; gap: 14px; }
 .verdict-strip__count { font-family: var(--mono); font-size: 11px; }
 
-.canvas { padding: 28px 32px 64px; max-width: 1100px; }
+.canvas { padding: 28px 32px 64px; max-width: 1360px; }
 
 .section { margin-bottom: 34px; }
 .section__head {
@@ -469,4 +469,44 @@ button { font: inherit; cursor: pointer; }
   .login { grid-template-columns: minmax(0, 1fr); }
   .login__pitch { padding: 6vh 24px 0; }
   .login__panel { padding: 5vh 24px 8vh; }
+}
+
+
+/* --- document panel ------------------------------------------------------ */
+/*
+   The Project Description is the deliverable. The panel reads as a document
+   record rather than a download button: what was written, what remains, and
+   which template it was built from.
+*/
+
+.doc {
+  background: var(--chalk); border: 1px solid var(--rule);
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+}
+.doc__body { padding: 24px 26px; }
+.doc__title {
+  font-family: var(--display); font-size: 20px; font-weight: 700;
+  letter-spacing: -0.02em; margin: 0 0 6px;
+}
+.doc__meta { margin: 0 0 18px; color: var(--steel); font-size: 13px; }
+
+.doc__progress { height: 6px; background: var(--mist); margin-bottom: 8px; }
+.doc__progress span { display: block; height: 100%; background: var(--flux); }
+.doc__ratio { display: flex; justify-content: space-between;
+  font-family: var(--mono); font-size: 11px; color: var(--inert);
+  margin-bottom: 20px; }
+
+.doc__todo { border-left: 1px solid var(--rule); padding: 24px 26px; }
+.doc__todo ol { list-style: none; margin: 10px 0 0; padding: 0; }
+.doc__todo li {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 6px 0; border-bottom: 1px dotted var(--rule);
+  font-size: 12px;
+}
+.doc__todo li:last-child { border-bottom: 0; }
+.doc__todo b { font-family: var(--mono); font-weight: 500; color: var(--warn); }
+
+@media (max-width: 1080px) {
+  .doc { grid-template-columns: minmax(0, 1fr); }
+  .doc__todo { border-left: 0; border-top: 1px solid var(--rule); }
 }

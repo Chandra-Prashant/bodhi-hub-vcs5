@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, downloadBlob, setToken } from "./api.js";
 import { sampleProject } from "./sample.js";
+import { DocumentPanel } from "./components/DocumentPanel.jsx";
 import { Login, ProjectForm } from "./components/Forms.jsx";
 import {
   Additionality,
@@ -15,6 +16,7 @@ const VIEWS = [
   ["register", "Compliance register"],
   ["quantify", "Quantification"],
   ["additionality", "Additionality"],
+  ["document", "Project Description"],
   ["project", "Project details"],
 ];
 
@@ -28,12 +30,15 @@ export default function App() {
   const [error, setError] = useState("");
   const [view, setView] = useState("register");
   const [regulatory, setRegulatory] = useState(null);
+  const [docStatus, setDocStatus] = useState(null);
+  const [docBusy, setDocBusy] = useState(false);
 
   function signOut() {
     setToken(null);
     setUser(null);
     setResult(null);
     setRegulatory(null);
+    setDocStatus(null);
     setView("register");
   }
 
@@ -56,10 +61,30 @@ export default function App() {
     setError("");
     try {
       setResult(await api.runAssessment(project));
+      // Assembled from the same inputs in the same pass, so the figures in the
+      // document cannot drift from the figures on screen.
+      setDocStatus(await api.documentStatus(project));
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function downloadPdd(stripGuidance) {
+    setDocBusy(true);
+    setError("");
+    try {
+      const blob = await api.projectDescription(project, stripGuidance);
+      const suffix = stripGuidance ? "submission" : "draft";
+      downloadBlob(
+        blob,
+        `VCS_PD_${project.name.replace(/\s+/g, "_")}_${suffix}.docx`
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDocBusy(false);
     }
   }
 
@@ -213,6 +238,23 @@ export default function App() {
                 <span className="eyebrow">VT0008 v1.0</span>
               </div>
               <Additionality additionality={result.additionality} />
+            </section>
+          )}
+
+          {view === "document" && (
+            <section className="section">
+              <div className="section__head">
+                <h2>Project Description</h2>
+                <span className="eyebrow">
+                  {docStatus?.template_used ?? "official Verra template"}
+                </span>
+              </div>
+              <DocumentPanel
+                status={docStatus}
+                busy={docBusy}
+                onDownload={() => downloadPdd(false)}
+                onDownloadFinal={() => downloadPdd(true)}
+              />
             </section>
           )}
 
