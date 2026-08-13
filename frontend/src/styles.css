@@ -510,3 +510,58 @@ button { font: inherit; cursor: pointer; }
   .doc { grid-template-columns: minmax(0, 1fr); }
   .doc__todo { border-left: 0; border-top: 1px solid var(--rule); }
 }
+
+
+/* --- ESG editor ---------------------------------------------------------- */
+
+.esg__bar {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  background: var(--chalk); border: 1px solid var(--rule);
+  padding: 13px 18px; margin-bottom: 20px;
+}
+.esg__tally { margin-left: auto; font-family: var(--mono); font-size: 12px;
+  color: var(--steel); }
+.esg__tally b { color: var(--ink); font-weight: 600; }
+
+.esg__ok {
+  border-left: 3px solid var(--pass); background: #eef7f3;
+  padding: 10px 13px; font-size: 12px; color: var(--pass);
+  margin-bottom: 20px;
+}
+
+.esg__pillar {
+  font-family: var(--display); font-size: 13px; font-weight: 700;
+  letter-spacing: 0.02em; text-transform: uppercase;
+  margin: 26px 0 10px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--rule-strong); color: var(--steel);
+}
+
+.esg__row {
+  background: var(--chalk); border: 1px solid var(--rule);
+  border-left: 3px solid var(--rule-strong);
+  padding: 15px 18px; margin-bottom: 10px;
+  display: flex; flex-direction: column; gap: 11px;
+}
+
+.esg__head { display: flex; align-items: baseline; gap: 11px; flex-wrap: wrap; }
+.esg__code {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  background: var(--ink); color: var(--chalk);
+  padding: 2px 7px; border-radius: 2px;
+}
+.esg__title { font-size: 14px; font-weight: 600; margin: 0; }
+.esg__level {
+  margin-left: auto; font-family: var(--mono); font-size: 11px;
+  font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+}
+
+.esg__na { display: flex; align-items: center; gap: 8px; font-size: 12px;
+  color: var(--steel); }
+.esg__na input { accent-color: var(--flux); }
+
+.esg__scores { display: grid; grid-template-columns: repeat(2, minmax(160px, 260px));
+  gap: 14px; }
+
+@media (max-width: 620px) {
+  .esg__scores { grid-template-columns: minmax(0, 1fr); }
+}

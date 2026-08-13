@@ -53,6 +53,9 @@ export const api = {
   traceabilityCsv: (payload) =>
     request("/assessment/traceability.csv", { method: "POST", body: payload, raw: true }),
   regulatoryStatus: () => request("/assessment/regulatory-status"),
+  esgSchema: () => request("/assessment/esg-schema"),
+  esgReview: (payload) =>
+    request("/assessment/esg-review", { method: "POST", body: payload }),
   documentStatus: (payload) =>
     request("/assessment/document-status", { method: "POST", body: payload }),
   projectDescription: (payload, stripGuidance = false) =>

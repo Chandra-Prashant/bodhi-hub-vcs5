@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { api, downloadBlob, setToken } from "./api.js";
 import { sampleProject } from "./sample.js";
 import { DocumentPanel } from "./components/DocumentPanel.jsx";
+import { EsgEditor } from "./components/EsgEditor.jsx";
 import { Login, ProjectForm } from "./components/Forms.jsx";
 import {
   Additionality,
@@ -16,6 +17,7 @@ const VIEWS = [
   ["register", "Compliance register"],
   ["quantify", "Quantification"],
   ["additionality", "Additionality"],
+  ["esg", "ESG risk"],
   ["document", "Project Description"],
   ["project", "Project details"],
 ];
@@ -32,6 +34,21 @@ export default function App() {
   const [regulatory, setRegulatory] = useState(null);
   const [docStatus, setDocStatus] = useState(null);
   const [docBusy, setDocBusy] = useState(false);
+  const [esgSchema, setEsgSchema] = useState(null);
+  const [esgReview, setEsgReview] = useState(null);
+  const [esgBusy, setEsgBusy] = useState(false);
+
+  async function reviewEsg() {
+    setEsgBusy(true);
+    setError("");
+    try {
+      setEsgReview(await api.esgReview(project));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setEsgBusy(false);
+    }
+  }
 
   function signOut() {
     setToken(null);
@@ -100,6 +117,7 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
     api.regulatoryStatus().then(setRegulatory).catch(() => setRegulatory(null));
+    api.esgSchema().then(setEsgSchema).catch(() => setEsgSchema(null));
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
@@ -238,6 +256,25 @@ export default function App() {
                 <span className="eyebrow">VT0008 v1.0</span>
               </div>
               <Additionality additionality={result.additionality} />
+            </section>
+          )}
+
+          {view === "esg" && (
+            <section className="section">
+              <div className="section__head">
+                <h2>ESG risk assessment</h2>
+                <span className="eyebrow">judgement supplied by the author</span>
+              </div>
+              <EsgEditor
+                schema={esgSchema}
+                entries={project.esg_entries ?? []}
+                onChange={(esg_entries) =>
+                  setProject({ ...project, esg_entries })
+                }
+                review={esgReview}
+                onReview={reviewEsg}
+                busy={esgBusy}
+              />
             </section>
           )}
 

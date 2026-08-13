@@ -24,7 +24,15 @@ from app.domain.baseline import ProjectEmissions, emission_reductions
 from app.domain.classification import ProjectIntake, classify
 from app.domain.compliance import build_compliance_report, traceability_csv
 from app.domain.emission_factors import PowerUnit, grid_emission_factor
-from app.domain.esg import RiskCategory, RiskEntry, assess_esg
+from app.domain.esg import (
+    CATEGORY_TITLES,
+    LIKELIHOOD_LABELS,
+    RISK_MATRIX,
+    SEVERITY_LABELS,
+    RiskCategory,
+    RiskEntry,
+    assess_esg,
+)
 from app.domain.monitoring import build_monitoring_parameters
 from app.domain.pdd_content import ProjectIdentity, build_pdd_content
 from app.domain.regulatory import check_registry
@@ -226,3 +234,62 @@ def project_description(
     result = build_pdd(content, out_dir / filename, strip_guidance=strip_guidance)
     return FileResponse(path=str(result.output_path),
                         media_type=DOCX_MEDIA_TYPE, filename=filename)
+
+
+@router.get("/esg-schema")
+def esg_schema(_user=Depends(get_current_user)) -> dict:
+    """The twelve safeguard categories and the risk matrix, served from the
+    engine's own copy.
+
+    The matrix is a regulatory constant transcribed from the VCS ESG Risk
+    Assessment Template. Duplicating it in the frontend would put the same
+    table in two places and let them drift, so the client renders from this.
+    """
+    return {
+        "categories": [
+            {
+                "code": category.value,
+                "pillar": pillar.value,
+                "title": title,
+                "clause": clause,
+            }
+            for category, (pillar, title, clause) in CATEGORY_TITLES.items()
+        ],
+        "severity_labels": SEVERITY_LABELS,
+        "likelihood_labels": LIKELIHOOD_LABELS,
+        "matrix": {
+            str(severity): {str(likelihood): level.value
+                            for likelihood, level in row.items()}
+            for severity, row in RISK_MATRIX.items()
+        },
+    }
+
+
+@router.post("/esg-review")
+def esg_review(
+    payload: AssessmentRequest,
+    _user=Depends(get_current_user),
+) -> dict:
+    """Validate a supplied ESG risk assessment without running everything else."""
+    if not payload.esg_entries:
+        result = assess_esg([])
+    else:
+        result = assess_esg([
+            RiskEntry(
+                category=RiskCategory(e.category), risk_id=e.risk_id,
+                description=e.description, severity=e.severity,
+                likelihood=e.likelihood, justification=e.justification,
+                mitigation=e.mitigation, not_applicable=e.not_applicable,
+                na_justification=e.na_justification,
+            ) for e in payload.esg_entries
+        ])
+    return {
+        "blocked": result.blocked,
+        "missing_categories": [c.value for c in result.missing_categories],
+        "elevated_risk_ids": [e.risk_id for e in result.elevated_risks],
+        "findings": [
+            {"check": f.check, "severity": f.severity.value,
+             "message": f.message, "source": f.source}
+            for f in result.findings
+        ],
+    }
