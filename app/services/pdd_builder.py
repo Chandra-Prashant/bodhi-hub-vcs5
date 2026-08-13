@@ -29,6 +29,13 @@ PD_TEMPLATES: dict[K.TemplateVersion, str] = {
     K.TemplateVersion.B: "VCS-Project-Description-Template-v5.0B.docx",
 }
 
+MR_TEMPLATES: dict[K.TemplateVersion, str] = {
+    # Note the capital V. Verra ships the Project Description as "v5.0A" and
+    # the Monitoring Report as "V5.0A"; the inconsistency is theirs.
+    K.TemplateVersion.A: "VCS-Monitoring-Report-Template-V5.0A.docx",
+    K.TemplateVersion.B: "VCS-Monitoring-Report-Template-V5.0B.docx",
+}
+
 
 @dataclass
 class PDDBuildResult:
@@ -47,14 +54,34 @@ class PDDBuildResult:
                       key=lambda kv: -kv[1])
 
 
+def _resolve(name: str) -> Path:
+    """Locate a template, tolerating Verra's inconsistent filename casing.
+
+    macOS is case-insensitive by default and Linux is not, so a name that
+    works on a developer laptop can fail in Docker or CI. Falling back to a
+    case-insensitive match turns that into a non-issue rather than a
+    production-only FileNotFoundError.
+    """
+    path = TEMPLATE_DIR / name
+    if path.exists():
+        return path
+
+    lowered = name.lower()
+    for candidate in TEMPLATE_DIR.glob("*.docx"):
+        if candidate.name.lower() == lowered:
+            return candidate
+
+    raise FileNotFoundError(
+        f"Template {name} not found in {TEMPLATE_DIR}. The official Verra "
+        f"templates must be present; do not substitute a copy edited by hand.")
+
+
 def template_path(version: K.TemplateVersion) -> Path:
-    path = TEMPLATE_DIR / PD_TEMPLATES[version]
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Template {path.name} not found in {TEMPLATE_DIR}. The official "
-            f"Verra templates must be present; do not substitute a copy edited "
-            f"by hand.")
-    return path
+    return _resolve(PD_TEMPLATES[version])
+
+
+def monitoring_report_template_path(version: K.TemplateVersion) -> Path:
+    return _resolve(MR_TEMPLATES[version])
 
 
 def build_pdd(
