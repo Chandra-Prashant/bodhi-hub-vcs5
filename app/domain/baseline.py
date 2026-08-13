@@ -117,8 +117,20 @@ def emission_reductions(
     project_emissions: ProjectEmissions | None = None,
     eg_facility_mwh: float | None = None,
     ef_embodied_kg_per_mwh: float | None = None,
+    technology=None,
 ) -> EmissionReductionResult:
-    """ER_y = BE_y - PE_y - LE_y   (VMR0017 eq. 17)."""
+    """ER_y = BE_y - PE_y - LE_y   (VMR0017 eq. 17).
+
+    When `technology` is supplied and no embodied factor is given, the
+    methodology default from VMR0017 s9.1 is applied. That table is mandatory,
+    not advisory: a caller-supplied figure that undercuts it overstates the
+    project's reductions.
+    """
+    if ef_embodied_kg_per_mwh is None and technology is not None:
+        from app.domain.monitoring import embodied_emission_factor
+        ef_embodied_kg_per_mwh, _ = embodied_emission_factor(technology)
+        if ef_embodied_kg_per_mwh == 0.0:
+            ef_embodied_kg_per_mwh = None
     be, findings = baseline_emissions(eg_project_mwh, ef_grid_cm)
 
     pe_obj = project_emissions or ProjectEmissions()
