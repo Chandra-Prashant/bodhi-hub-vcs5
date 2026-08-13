@@ -7,6 +7,8 @@ defect in the prototype.
 
 from __future__ import annotations
 
+import uuid
+
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -31,12 +33,28 @@ def get_current_user(
 ) -> User:
     try:
         payload = decode_token(token, TokenType.ACCESS)
-    except jwt.PyJWTError:
+        user_id = uuid.UUID(payload["sub"])
+    except (jwt.PyJWTError, KeyError, ValueError, TypeError):
         raise _CREDENTIALS_ERROR
 
-    user = db.get(User, payload.get("sub"))
+    user = db.get(User, user_id)
     if user is None or not user.is_active or user.is_locked:
         raise _CREDENTIALS_ERROR
+    return user
+
+
+def require_password_current(
+    user: User = Depends(get_current_user),
+) -> User:
+    """Blocks work routes until a provisioned initial password is replaced.
+
+    Deliberately not applied to /auth/me or /auth/change-password, or the user
+    would have no way to clear the flag.
+    """
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required before using this endpoint")
     return user
 
 

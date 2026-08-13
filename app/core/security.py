@@ -14,7 +14,11 @@ from typing import Any
 
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, VerificationError
+from argon2.exceptions import (
+    InvalidHashError,
+    VerificationError,
+    VerifyMismatchError,
+)
 
 from app.core.config import settings
 
@@ -31,15 +35,20 @@ def hash_password(plain: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    # InvalidHashError is NOT a subclass of VerificationError, so a corrupt or
+    # truncated hash column would propagate a 500 instead of failing the login.
     try:
         _hasher.verify(hashed, plain)
         return True
-    except (VerifyMismatchError, VerificationError):
+    except (VerifyMismatchError, VerificationError, InvalidHashError):
         return False
 
 
 def needs_rehash(hashed: str) -> bool:
-    return _hasher.check_needs_rehash(hashed)
+    try:
+        return _hasher.check_needs_rehash(hashed)
+    except InvalidHashError:
+        return False
 
 
 def create_token(
