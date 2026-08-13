@@ -4,7 +4,8 @@ Automates VCS v5.0 project design documentation for grid-connected **solar PV
 and wind** projects under methodology **VMR0017 v1.0** (an ACM0002 v22.0
 revision).
 
-**All eight modules implemented. 331 tests passing** — 304 domain, 27 endpoint.
+**All eight modules implemented, with a web interface. 331 tests passing** —
+304 domain, 27 endpoint.
 
 ---
 
@@ -17,7 +18,7 @@ revision).
 A validation/verification body must be able to reproduce every reported figure
 by hand from the cited clause. Every finding the system emits carries a
 `source` string naming the document and paragraph it came from, and those
-strings feed the traceability matrix export in Module 7.
+strings feed the traceability matrix export.
 
 Practical consequence: when the engine lacks the data to compute something
 correctly, it emits `FAIL` rather than a plausible default. A number nobody can
@@ -25,16 +26,20 @@ defend at validation is worse than no number.
 
 The same rule governs judgement, not just arithmetic:
 
-- **Module 5 does not invent ESG risks.** Identifying risks and scoring
+- **The ESG module does not invent risks.** Identifying risks and scoring
   severity are site-specific judgements about real people and ecosystems. The
-  engine supplies the matrix, the category registry, and the completeness
-  checks.
+  engine supplies the matrix, the category registry and the completeness checks;
+  the author supplies the judgement.
 - **The not-applicable pass does not touch safeguards sections**, and is
   technology-aware: "no capacity limit applies" is true for solar and false for
   hydro.
 - **The auditor detects gaps deterministically** and lets a model explain them,
   never the reverse. Two runs on the same project must not disagree about
   whether it is ready for validation.
+- **The frontend holds no regulatory constants.** The ESG risk matrix is served
+  from the engine (`/assessment/esg-schema`) rather than duplicated in
+  JavaScript, because two copies eventually disagree and the disagreement is
+  silent.
 
 ---
 
@@ -46,9 +51,11 @@ conda activate bodhi_vcs5
 pip install -r requirements-dev.txt
 
 cp .env.example .env
-python -c "import secrets; print(secrets.token_urlsafe(48))"   # -> SECRET_KEY
-# also set POSTGRES_PASSWORD and GEMINI_API_KEY
+python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
+
+Put that value in `SECRET_KEY`, and set `POSTGRES_PASSWORD` and
+`GEMINI_API_KEY`.
 
 Database (Docker Desktop must be running):
 
@@ -60,14 +67,22 @@ alembic upgrade head
 
 Wait for status `healthy` before continuing.
 
-First admin, then the server:
+First admin, then the API:
 
 ```bash
 PYTHONPATH=. python scripts/create_admin.py
 uvicorn app.main:app --reload --port 8000
 ```
 
-Interactive API docs at http://127.0.0.1:8000/docs
+The interface, in a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open http://localhost:5173. API docs at http://127.0.0.1:8000/docs
 
 ---
 
@@ -92,14 +107,15 @@ still detects the transaction bug described below:
 ```bash
 cp app/api/auth.py /tmp/auth_good.py
 sed -i '' 's/_commit_then_raise(db, _GENERIC_LOGIN_FAILURE)/raise _GENERIC_LOGIN_FAILURE/' app/api/auth.py
-pytest tests/test_endpoints.py -q      # expect 5 failed, 22 passed
+pytest tests/test_endpoints.py -q
 cp /tmp/auth_good.py app/api/auth.py
-pytest tests/test_endpoints.py -q      # expect 27 passed
+pytest tests/test_endpoints.py -q
 ```
 
-Two of those five failures are clean assertions naming the problem; the other
-three are collateral `InvalidRequestError` from the rollback discarding the
-fixture's own data. Read the assertion failures first.
+Expect `5 failed, 22 passed`, then `27 passed`. Two of the five failures are
+clean assertions naming the problem; the other three are collateral
+`InvalidRequestError` from the rollback discarding the fixture's own data. Read
+the assertion failures first.
 
 ---
 
@@ -115,6 +131,7 @@ app/
   services/    docx rendering, document builders, auditor, audit trail
   data/        reference tables (LDC list, World Bank income groups)
   templates/   the 13 official Verra v5.0A/5.0B .docx templates
+frontend/      Vite + React interface
 migrations/    Alembic — the only way the schema changes
 scripts/       out-of-band operational scripts
 tests/
@@ -131,16 +148,17 @@ its results are reproducible.
 | # | Module | Status |
 |---|---|---|
 | — | Authentication, RBAC, audit trail | **done** |
+| — | Web interface | **done** |
 | 1 | Project Intake & Classification | **done** |
 | 2 | Baseline & Additionality (VT0011 / VMR0017 / VT0008) | **done** |
 | 3 | PDD Builder (official template, filled in place) | **done** |
 | 4 | Monitoring Plan & Data/Parameters | **done** |
 | 5 | ESG Risk Assessment | **done** (docx rendering pending) |
-| 6 | Monitoring Report Generator | **done** |
+| 6 | Monitoring Report Generator | **done** (no API route or UI yet) |
 | 7 | Compliance Engine, Traceability & Auditor | **done** |
 | 8 | Regulatory Updates Tracking | **done** |
 
-### What each domain module does
+### Domain engines
 
 **`classification.py`** — 5.0A/5.0B template routing at the 1 Jan 2027 cutover;
 VMR0017 Table 1 eligibility (technology x geography x capacity); crediting
@@ -162,13 +180,13 @@ bisection, +/-10% sensitivity across four critical assumptions, and the common
 practice F factor with footnote 17 handled.
 
 **`monitoring.py`** — VMR0017 s9.1/s9.2 parameter registry, including the
-mandated embodied-emission-factor defaults table. Conditional parameters:
-`EFRes` for hydro, `GWPagent` and `Me,released,y` for battery storage.
+mandated embodied-emission-factor defaults. Conditional parameters: `EFRes` for
+hydro, `GWPagent` and `Me,released,y` for battery storage.
 
 **`monitoring_report.py`** — ex-post quantification from metered generation;
-monitoring period bounds; period continuity (a gap forfeits credits, an overlap
-double-issues); meter calibration currency and uncertainty; data-gap handling
-via the VT0010 route; ex-ante versus ex-post variance.
+period bounds and continuity (a gap forfeits credits, an overlap double-issues);
+meter calibration currency and uncertainty; data-gap handling via VT0010;
+ex-ante versus ex-post variance.
 
 **`esg.py`** — the 5x5 severity/likelihood matrix transcribed from the ESG
 template, all twelve safeguard categories with clause references, and
@@ -182,19 +200,37 @@ dependencies at constant and function level, SHA-256 integrity checking of
 vendored templates, and `assess_update(doc, version)` returning a
 re-verification checklist.
 
-**`pdd_content.py` / `pdd_applicability.py`** — assembles field values and
-prose for the Project Description, including a technology-aware
-not-applicable pass.
-
 **`services/auditor.py`** — deterministic gap ranking
 (BLOCKER/REQUIRED/REVIEW/INFO) with an explain-only LLM narrative layer.
 
 ---
 
+## Interface
+
+Five screens, all driven by `POST /assessment/run`, which executes every engine
+in one request so a compliance verdict can never be computed from different
+inputs than the reductions figure beside it.
+
+- **Compliance register** — the readiness verdict, the twenty requirements with
+  their clause and evidence source, and the ranked list of what is outstanding
+- **Quantification** — the derivation chain: each figure with the arithmetic
+  that produced it and the clause that governs it
+- **Additionality** — both IRRs against the benchmark, sensitivity, common
+  practice, and CCP label eligibility
+- **ESG risk** — the twelve safeguard categories with severity/likelihood
+  scoring and live risk levels
+- **Project Description** — completion state and `.docx` download, as a working
+  draft (keeps Verra's guidance) or a submission copy (strips it)
+
+Plus a traceability matrix CSV export, which is the register a validation body
+works from.
+
+---
+
 ## Regulatory facts that drive the design
 
-Each of these was found by reading the primary source, and each changed a
-number or a behaviour that looked correct beforehand.
+Each was found by reading the primary source, and each changed a number or a
+behaviour that looked correct beforehand.
 
 1. **E&I crediting period is 5 years, renewable twice — 15 years maximum**
    (VCS Standard v5.0 s3.8.4, Table 8). Older PDDs assume 7 x 3 = 21 years. A
@@ -210,7 +246,8 @@ number or a behaviour that looked correct beforehand.
    term. A PDD migrated from ACM0002 will be missing it. The engine blocks
    rather than defaulting it to zero.
 5. **Additional is not the same as CCP-eligible.** VT0008 s5.4.2 condition (a)
-   establishes additionality; (b) and (c) govern CCP label eligibility.
+   establishes additionality; (b) and (c) govern CCP label eligibility, which
+   affects the price the credits fetch.
 6. **Non-permanence risk applies only to carbon sinks** (VCS Standard v5.0
    s3.2.8). Fossil-CO2 displacement is exempt — which is why the
    not-applicable pass can safely mark it N/A for solar and wind, but not the
@@ -226,7 +263,8 @@ number or a behaviour that looked correct beforehand.
   asserted on decode, so a refresh token cannot be replayed as an access token.
 - Every non-public route carries `Depends(get_current_user)`. No exceptions.
 - No self-registration. Users are provisioned by an ADMIN; the first admin is
-  created out of band via `scripts/create_admin.py`.
+  created out of band via `scripts/create_admin.py`, which validates the address
+  with the same rule the login endpoint uses.
 - Login failures return one generic message regardless of cause, so the
   endpoint cannot enumerate valid addresses. Tested against unknown addresses,
   wrong passwords and locked accounts.
@@ -236,7 +274,8 @@ number or a behaviour that looked correct beforehand.
   deletes a row — it is the evidence trail a VVB inspects. Retention is handled
   by archival.
 - Cross-organization scoping is covered by endpoint tests.
-- Client data directories are gitignored.
+- The frontend holds the access token in memory only, never in `localStorage`.
+  A page refresh signs you out, which is the correct trade for this data.
 
 ### Transaction gotcha — read before touching `api/auth.py`
 
@@ -266,9 +305,7 @@ Ordered by how much they would hurt at validation.
    OM/BM/CM equations live there, and TOOL07 is not in the regulations pack.
    The implementation follows the standard TOOL07 formulation and is marked
    `UNVERIFIED` in source. Module 8 reports this as a `FAIL` and names the
-   affected functions (`simple_om`, `average_om`, `build_margin`,
-   `check_simple_om_applicability`). **This is the only remaining gap that code
-   cannot close.**
+   affected functions. **This is the only remaining gap that code cannot close.**
 
    ```bash
    python -c "
@@ -276,27 +313,32 @@ Ordered by how much they would hurt at validation.
    [print(f.message) for f in check_registry() if f.check=='regulatory.unverified']"
    ```
 
-2. **Dispatch data ingest not built.** The emission factor engine takes
-   `PowerUnit` objects; nothing yet loads them from CEA or CERC sources.
-3. **No filled reference PDD.** The templates are blank. The generated prose is
+2. **Nothing is deployed.** Docker Compose on a developer laptop is not a
+   handover.
+3. **Dispatch data ingest not built.** The emission factor engine takes
+   `PowerUnit` objects; nothing yet loads them from CEA or CERC sources, and the
+   interface does not edit them.
+4. **No filled reference PDD.** The templates are blank. The generated prose is
    defensible and clause-cited, but Verra reviewers have phrasing preferences
    that only surface in an accepted document.
-4. **Benchmark IRR must be justified.** VT0008 Appendix 2 sA2.3 governs
+5. **Benchmark IRR must be justified.** VT0008 Appendix 2 sA2.3 governs
    selection; a VVB will challenge an unsourced figure. Use CERC-approved
    return on equity, a WACC build-up, or bond yield plus a documented premium.
-5. **ESG docx rendering not built.** The ESG template's risk rows use dropdown
+6. **Module 6 has no API route or interface.** The monitoring report builder
+   works and is tested, but is only reachable from Python.
+7. **ESG docx rendering not built.** The ESG template's risk rows use dropdown
    content controls, which need different handling from the PD template.
-6. **Annual estimates are held flat.** VT0011 para 72 Option 2 requires the
+8. **Annual estimates are held flat.** VT0011 para 72 Option 2 requires the
    build margin to be updated annually; per-year factors are needed before
    submission. The engine warns rather than hiding it.
-7. **Simple adjusted OM and dispatch data analysis raise `FAIL`.** Deliberate —
+9. **Simple adjusted OM and dispatch data analysis raise `FAIL`.** Deliberate —
    they need the lambda split and hourly dispatch records respectively.
-8. **Sensitivity varies one parameter at a time.** VVBs increasingly ask for
-   combined worst-case scenarios.
-9. **Multi-tenancy is application-layer**, not Postgres RLS. Cross-organization
-   scoping is tested at the endpoint level, but one missing `.filter()` on a
-   future route would still leak.
-10. **The ex-ante/ex-post variance threshold (10%) is a house heuristic**, not a
+10. **Sensitivity varies one parameter at a time.** VVBs increasingly ask for
+    combined worst-case scenarios.
+11. **Multi-tenancy is application-layer**, not Postgres RLS. Cross-organization
+    scoping is tested at the endpoint level, but one missing `.filter()` on a
+    future route would still leak.
+12. **The ex-ante/ex-post variance threshold (10%) is a house heuristic**, not a
     VCS requirement. It is labelled as such in the finding and its source, and
     must never be quoted to a client as a rule.
 
@@ -318,8 +360,9 @@ alembic upgrade head
 **Percent-encoded credentials break Alembic's config parser.** `env.py` builds
 the engine directly from `settings.database_url` rather than through
 `config.set_main_option`, which routes the value through `configparser` and
-chokes on the `%` in an encoded password. For the same reason `tests/conftest.py`
-uses `make_url(...).set(database=...)` rather than string surgery.
+chokes on the `%` in an encoded password. For the same reason
+`tests/conftest.py` uses `make_url(...).set(database=...)` rather than string
+surgery.
 
 **Verra's template filenames are inconsistently cased** — the Project
 Description ships as `v5.0A`, the Monitoring Report as `V5.0A`. macOS is
@@ -340,3 +383,7 @@ python -c "
 from app.domain.regulatory import dependency_index
 print(dependency_index()['domain.constants.EI_MAX_TOTAL_CREDITING_YEARS'])"
 ```
+
+**In zsh, `#` is not a comment** in interactive shells by default, so a trailing
+comment on a command line becomes an argument. `setopt interactive_comments`
+fixes it.
