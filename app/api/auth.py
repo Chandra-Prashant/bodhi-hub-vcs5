@@ -56,6 +56,18 @@ _GENERIC_LOGIN_FAILURE = HTTPException(
 )
 
 
+def _commit_then_raise(db: Session, exc: HTTPException) -> None:
+    """Persist audit rows and counter updates, then fail the request.
+
+    get_db() rolls back on any exception, so an audit row written immediately
+    before `raise` is discarded along with the failed request. That silently
+    disables both the failure trail and account lockout — the counter never
+    survives to be incremented a second time. Commit first, then raise.
+    """
+    db.commit()
+    raise exc
+
+
 def _issue_pair(user: User) -> TokenPair:
     claims = {"role": user.role.value, "org": user.organization}
     return TokenPair(
@@ -80,7 +92,7 @@ def login(
             db, action=audit.Action.LOGIN, outcome=audit.FAILURE,
             actor_email=payload.email.lower(), organization="-",
             request=request, note="No such user")
-        raise _GENERIC_LOGIN_FAILURE
+        _commit_then_raise(db, _GENERIC_LOGIN_FAILURE)
 
     if user.is_locked or not user.is_active:
         audit.record(
@@ -88,7 +100,7 @@ def login(
             actor_email=user.email, organization=user.organization,
             user_id=user.id, request=request,
             note="Account locked" if user.is_locked else "Account inactive")
-        raise _GENERIC_LOGIN_FAILURE
+        _commit_then_raise(db, _GENERIC_LOGIN_FAILURE)
 
     if not verify_password(payload.password, user.hashed_password):
         user.failed_login_count += 1
@@ -104,7 +116,7 @@ def login(
             db, action=audit.Action.LOGIN, outcome=audit.FAILURE,
             actor_email=user.email, organization=user.organization,
             user_id=user.id, request=request, note=note)
-        raise _GENERIC_LOGIN_FAILURE
+        _commit_then_raise(db, _GENERIC_LOGIN_FAILURE)
 
     # Transparent upgrade if Argon2 parameters have been hardened since signup.
     if needs_rehash(user.hashed_password):
@@ -166,9 +178,9 @@ def change_password(
             db, action=audit.Action.PASSWORD_CHANGE, outcome=audit.FAILURE,
             actor_email=user.email, organization=user.organization,
             user_id=user.id, request=request, note="Current password incorrect")
-        raise HTTPException(
+        _commit_then_raise(db, HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Current password is incorrect")
+            detail="Current password is incorrect"))
 
     if payload.new_password == payload.current_password:
         raise HTTPException(
