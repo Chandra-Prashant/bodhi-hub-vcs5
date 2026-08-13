@@ -4,7 +4,7 @@ Automates VCS v5.0 project design documentation for grid-connected **solar PV
 and wind** projects under methodology **VMR0017 v1.0** (an ACM0002 v22.0
 revision).
 
-**88 tests passing.**
+**267 tests passing** — 240 domain, 27 endpoint.
 
 ---
 
@@ -16,12 +16,17 @@ revision).
 
 A validation/verification body must be able to reproduce every reported figure
 by hand from the cited clause. Every finding the system emits carries a
-`source` string naming the document and paragraph it came from; those strings
-feed the traceability matrix export.
+`source` string naming the document and paragraph it came from, and those
+strings feed the traceability matrix export in Module 7.
 
 Practical consequence: when the engine lacks the data to compute something
 correctly, it emits `FAIL` rather than a plausible default. A number nobody can
 defend at validation is worse than no number.
+
+The same rule governs judgement, not just arithmetic. The ESG module does not
+invent risks. The not-applicable pass does not touch safeguards sections. The
+auditor detects gaps deterministically and lets a model explain them, never the
+reverse.
 
 ---
 
@@ -41,9 +46,11 @@ Database (Docker Desktop must be running):
 
 ```bash
 docker compose up -d
-docker compose ps                      # wait for "healthy"
+docker compose ps
 alembic upgrade head
 ```
+
+Wait for status `healthy` before continuing.
 
 First admin, then the server:
 
@@ -54,27 +61,37 @@ uvicorn app.main:app --reload --port 8000
 
 Interactive API docs at http://127.0.0.1:8000/docs
 
-Tests:
+---
+
+## Tests
 
 ```bash
 pytest -q
 ```
 
-### Smoke test
+Expect `267 passed`. If you see `240 passed, 27 skipped`, Postgres is not
+reachable — the endpoint tests skip rather than fail so the domain suite still
+gives a signal without Docker. `pytest -q -rs` prints the skip reason.
+
+The endpoint tests create a throwaway `bodhi_vcs5_test` database alongside the
+development one and drop it afterwards; they never touch real data.
+
+### Verifying the suite has teeth
+
+A test that cannot fail manufactures confidence. To check the regression suite
+still detects the transaction bug described below:
 
 ```bash
-read -rs PW && TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d "{\"email\":\"YOUR_EMAIL\",\"password\":\"$PW\"}" \
-  | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])"); unset PW
-
-curl -s -X POST http://127.0.0.1:8000/api/v1/classification/evaluate \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"name":"Aligarh Solar One","proponent":"Test Co","country_iso2":"IN",
-       "technology":"SOLAR_PV_TERRESTRIAL","installed_capacity_mw":50,
-       "expected_annual_generation_mwh":87600,
-       "initial_crediting_period_start":"2026-03-01"}' | python -m json.tool
+cp app/api/auth.py /tmp/auth_good.py
+sed -i '' 's/_commit_then_raise(db, _GENERIC_LOGIN_FAILURE)/raise _GENERIC_LOGIN_FAILURE/' app/api/auth.py
+pytest tests/test_endpoints.py -q      # expect 5 failed, 22 passed
+cp /tmp/auth_good.py app/api/auth.py
+pytest tests/test_endpoints.py -q      # expect 27 passed
 ```
+
+Two of those five failures are clean assertions naming the problem; the other
+three are collateral `InvalidRequestError` from the rollback discarding the
+fixture's own data. Read the assertion failures first.
 
 ---
 
@@ -87,7 +104,7 @@ app/
   domain/      pure calculation engines — no DB, no LLM, fully unit-tested
   schemas/     Pydantic request/response models
   api/         FastAPI routers and dependencies
-  services/    audit trail; RAG and document generation to come
+  services/    docx rendering, PDD builder, auditor, audit trail
   data/        reference tables (LDC list, World Bank income groups)
   templates/   the 13 official Verra v5.0A/5.0B .docx templates
 migrations/    Alembic — the only way the schema changes
@@ -108,55 +125,79 @@ its results are reproducible.
 | — | Authentication, RBAC, audit trail | **done** |
 | 1 | Project Intake & Classification | **done** |
 | 2 | Baseline & Additionality (VT0011 / VMR0017 / VT0008) | **done** |
-| 3 | PDD Builder (docxtpl → 5.0A / 5.0B) | next |
-| 4 | Monitoring Plan Builder | |
-| 5 | ESG Assessment | |
-| 6 | Monitoring Report Generator | |
-| 7 | Compliance Checklist & Validation Engine | |
-| 8 | Regulatory Updates Tracking | |
+| 3 | PDD Builder (official template, filled in place) | **done** |
+| 4 | Monitoring Plan & Data/Parameters | **done** |
+| 5 | ESG Risk Assessment | **done** (docx rendering pending) |
+| 6 | Monitoring Report Generator | not started |
+| 7 | Compliance Engine, Traceability & Auditor | **done** |
+| 8 | Regulatory Updates Tracking | not started |
 
-The auditor agent lands with Module 7, once there are structured findings for
-it to reason over rather than raw prose.
+### What each domain module does
 
-### What Modules 1–2 cover
+**`classification.py`** — 5.0A/5.0B template routing at the 1 Jan 2027 cutover;
+VMR0017 Table 1 eligibility (technology x geography x capacity); crediting
+period and registration deadlines; VT0011 combined-margin weights; an
+implied-capacity-factor band that catches kW/MW and kWh/MWh mix-ups before they
+reach the baseline.
 
-**`domain/classification.py`** — 5.0A/5.0B template routing at the 1 Jan 2027
-cutover; VMR0017 Table 1 eligibility (technology x geography x capacity);
-crediting period and registration deadlines; VT0011 combined-margin weights;
-data-quality checks including an implied-capacity-factor band that catches
-kW/MW and kWh/MWh mix-ups before they reach the baseline.
+**`emission_factors.py`** — VT0011 Steps 3-6. Per-unit factors via Option A1
+(fuel), A2 (efficiency) or A3 (defaults); simple and average operating margin
+with the para 40 low-cost/must-run gate; build margin sample selection per para
+75 (SET-5 vs SET->=20%); combined margin per para 86.
 
-**`domain/emission_factors.py`** — VT0011 Steps 3-6. Per-unit emission factors
-via Option A1 (fuel), A2 (efficiency) or A3 (defaults); simple and average
-operating margin with the para 40 low-cost/must-run gate; build margin sample
-selection per para 75 (SET-5 vs SET->=20%); combined margin per para 86.
-
-**`domain/baseline.py`** — `BE_y = EG_PJ,y x EF_grid,CM,y`; project emissions
-per VMR0017 eq. (1); embodied-emissions leakage per eq. (19); reductions per
+**`baseline.py`** — `BE_y = EG_PJ,y x EF_grid,CM,y`; project emissions per
+VMR0017 eq. (1); embodied-emissions leakage per eq. (19); reductions per
 eq. (17).
 
-**`domain/additionality.py`** — VT0008 benchmark analysis with project IRR by
+**`additionality.py`** — VT0008 benchmark analysis with project IRR by
 bisection, +/-10% sensitivity across four critical assumptions, and the common
 practice F factor with footnote 17 handled.
+
+**`monitoring.py`** — VMR0017 s9.1/s9.2 parameter registry, including the
+mandated embodied-emission-factor defaults table. Conditional parameters:
+`EFRes` for hydro, `GWPagent` and `Me,released,y` for battery storage.
+
+**`esg.py`** — the 5x5 severity/likelihood matrix transcribed from the ESG
+template, all twelve safeguard categories with clause references, and
+s3.18.1(2) commensurate-mitigation checks.
+
+**`compliance.py`** — twenty VCS v5.0 requirements mapped to the findings that
+evidence them, four statuses, and the traceability matrix CSV export.
+
+**`pdd_content.py` / `pdd_applicability.py`** — assembles field values and
+prose for the Project Description, including a technology-aware
+not-applicable pass.
+
+**`services/auditor.py`** — deterministic gap ranking
+(BLOCKER/REQUIRED/REVIEW/INFO) with an explain-only LLM narrative layer.
 
 ---
 
 ## Regulatory facts that drive the design
 
+Each of these was found by reading the primary source, and each changed a
+number or a behaviour that looked correct beforehand.
+
 1. **E&I crediting period is 5 years, renewable twice — 15 years maximum**
    (VCS Standard v5.0 s3.8.4, Table 8). Older PDDs assume 7 x 3 = 21 years. A
    financial model carrying 21 years of credit revenue overstates the
    with-credits IRR and can invert the additionality verdict.
-   `build_cashflows` enforces the cap.
-2. **Barrier analysis is unavailable under VMR0017** (s5.3.2). Additionality
+2. **VMR0017 s9.1 mandates the embodied emission factor by technology** — solar
+   PV 43, wind 13, geothermal 37, hydropower 21, ocean 8 g CO2e/kWh. It is not
+   a free input. Substituting a lower figure on a 50 MW solar project overstates
+   reductions by roughly 1,600 tCO2e a year.
+3. **Barrier analysis is unavailable under VMR0017** (s5.3.2). Additionality
    runs regulatory surplus -> investment analysis -> common practice only.
-3. **VMR0017 added embodied-emissions leakage** (eq. 19/20); ACM0002 had no
-   such term. A PDD migrated from ACM0002 will be missing it and will overstate
-   reductions. The engine blocks rather than defaulting it to zero.
-4. **Additional is not the same as CCP-eligible.** VT0008 s5.4.2 condition (a)
+4. **VMR0017 added embodied-emissions leakage** (eq. 19/20); ACM0002 had no such
+   term. A PDD migrated from ACM0002 will be missing it. The engine blocks
+   rather than defaulting it to zero.
+5. **Additional is not the same as CCP-eligible.** VT0008 s5.4.2 condition (a)
    establishes additionality; (b) and (c) govern CCP label eligibility. A
-   project can be additional yet ineligible for CCP labels, which is
-   commercially material.
+   project can be additional yet ineligible for CCP labels.
+6. **Non-permanence risk applies only to carbon sinks** (VCS Standard v5.0
+   s3.2.8). Fossil-CO2 displacement is exempt — which is why the
+   not-applicable pass can safely mark it N/A for solar and wind, but not the
+   capacity-limit section for hydro.
 
 ---
 
@@ -170,7 +211,8 @@ practice F factor with footnote 17 handled.
 - No self-registration. Users are provisioned by an ADMIN; the first admin is
   created out of band via `scripts/create_admin.py`.
 - Login failures return one generic message regardless of cause, so the
-  endpoint cannot enumerate valid addresses.
+  endpoint cannot enumerate valid addresses. Tested against unknown addresses,
+  wrong passwords and locked accounts.
 - Failed attempts increment a counter and lock the account at
   `MAX_FAILED_LOGINS`. Unlock is an audited admin action.
 - `audit_logs` is append-only. There is no application path that updates or
@@ -178,15 +220,22 @@ practice F factor with footnote 17 handled.
   by archival.
 - Client data directories are gitignored.
 
-### Transaction gotcha, fixed — read before touching `api/auth.py`
+### Transaction gotcha — read before touching `api/auth.py`
 
 `get_db()` rolls back on any exception. An audit row written immediately before
 `raise HTTPException(...)` is therefore **discarded along with the failed
 request**. This silently disabled both the failure audit trail and account
-lockout: the counter never survived to be incremented twice.
+lockout: the counter never survived to be incremented twice. Every test in the
+domain suite passed throughout.
 
 Failure paths call `_commit_then_raise(db, exc)` instead of raising directly.
 Any new route that audits a failure must do the same.
+
+The same trap has a second form in the tests. A `get_db` override that merely
+yields a session removes the code path where the bug lives, and the suite then
+passes against broken code — the first version of `tests/conftest.py` did
+exactly that. The override mirrors `get_db`'s commit/rollback semantics for
+this reason.
 
 ---
 
@@ -199,27 +248,28 @@ Ordered by how much they would hurt at validation.
    OM/BM/CM equations live in TOOL07, which is not in the regulations pack. The
    implementation follows the standard TOOL07 formulation and is marked
    `UNVERIFIED` in source. Download TOOL07, check each docstring against it,
-   and record the check before any output reaches a client.
-2. **No endpoint tests.** `tests/test_auth.py` covers hashing and JWT,
-   including token-type confusion, `alg=none`, forged signatures and the
-   72-byte truncation case. It does not cover lockout counting, organization
-   scoping, or audit persistence — those need a throwaway Postgres. The
-   uncovered list is at the bottom of that file. The transaction bug above
-   passed every existing test; it was found by hand, which is the argument for
-   building this fixture.
-3. **Dispatch data ingest not built.** The emission factor engine takes
+   and record the check before any output reaches a client. **This is the only
+   remaining gap that code cannot close.**
+2. **Dispatch data ingest not built.** The emission factor engine takes
    `PowerUnit` objects; nothing yet loads them from CEA or CERC sources.
-4. **No filled reference PDD.** The templates are blank. Mapping placeholders
-   without one completed example to check against is guesswork.
-5. **Simple adjusted OM and dispatch data analysis raise `FAIL`.** Deliberate —
-   they need the lambda split and hourly dispatch records respectively.
-6. **Sensitivity varies one parameter at a time.** VVBs increasingly ask for
-   combined worst-case scenarios.
-7. **Multi-tenancy is application-layer**, not Postgres RLS. One missing
-   `.filter()` leaks another organization's data.
-8. **Benchmark IRR must be justified.** VT0008 Appendix 2 sA2.3 governs
+3. **No filled reference PDD.** The templates are blank. The generated prose is
+   defensible and clause-cited, but Verra reviewers have phrasing preferences
+   that only surface in an accepted document.
+4. **Benchmark IRR must be justified.** VT0008 Appendix 2 sA2.3 governs
    selection; a VVB will challenge an unsourced figure. Use CERC-approved
    return on equity, a WACC build-up, or bond yield plus a documented premium.
+5. **Annual estimates are held flat.** VT0011 para 72 Option 2 requires the
+   build margin to be updated annually; per-year factors are needed before
+   submission. The engine warns rather than hiding it.
+6. **ESG docx rendering not built.** The ESG template's risk rows use dropdown
+   content controls, which need different handling from the PD template.
+7. **Simple adjusted OM and dispatch data analysis raise `FAIL`.** Deliberate —
+   they need the lambda split and hourly dispatch records respectively.
+8. **Sensitivity varies one parameter at a time.** VVBs increasingly ask for
+   combined worst-case scenarios.
+9. **Multi-tenancy is application-layer**, not Postgres RLS. Cross-organization
+   scoping is now tested at the endpoint level, but one missing `.filter()` on
+   a future route would still leak.
 
 ---
 
@@ -239,6 +289,11 @@ alembic upgrade head
 **Percent-encoded credentials break Alembic's config parser.** `env.py` builds
 the engine directly from `settings.database_url` rather than through
 `config.set_main_option`, which routes the value through `configparser` and
-chokes on the `%` in an encoded password.
+chokes on the `%` in an encoded password. For the same reason `tests/conftest.py`
+uses `make_url(...).set(database=...)` rather than string surgery.
 
 **Scripts need the project root on the path:** `PYTHONPATH=. python scripts/...`
+
+**On Apple Silicon**, `postgis/postgis:15-3.4` runs under emulation
+(`linux/amd64` on `linux/arm64`). It works but is slower; worth revisiting if
+Postgres becomes sluggish or flaky under load.
