@@ -22,6 +22,7 @@ from app.domain.additionality import AdditionalityResult, AdditionalityVerdict
 from app.domain.baseline import EmissionReductionResult
 from app.domain.classification import Classification, Finding, ProjectIntake, Severity
 from app.domain.emission_factors import EmissionFactorResult
+from app.domain.pdd_applicability import not_applicable_sections
 
 DATE_FMT = "%d-%b-%Y"
 
@@ -349,6 +350,12 @@ def build_sections(
             "country. Regulatory surplus is therefore demonstrated."
         ]
 
+    # Not-applicable sections are merged LAST but must never overwrite drafted
+    # content, so anything already present wins.
+    na_sections, _ = not_applicable_sections(intake, classification)
+    for heading, paragraphs in na_sections.items():
+        sections.setdefault(heading, paragraphs)
+
     sections.update(_quantification(er, ef, intake))
     return sections
 
@@ -427,6 +434,9 @@ def build_pdd_content(
             "VT0011 para 72 Option 2 requires the build margin to be updated "
             "annually; supply per-year factors before submission.",
             "VT0011 v1.0 para 72"))
+
+    _, na_findings = not_applicable_sections(intake, classification)
+    findings.extend(na_findings)
 
     return PDDContent(
         template_version=classification.template_version,
