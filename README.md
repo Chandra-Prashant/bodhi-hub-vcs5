@@ -4,7 +4,7 @@ Automates VCS v5.0 project design documentation for grid-connected **solar PV
 and wind** projects under methodology **VMR0017 v1.0** (an ACM0002 v22.0
 revision).
 
-**267 tests passing** — 240 domain, 27 endpoint.
+**All eight modules implemented. 331 tests passing** — 304 domain, 27 endpoint.
 
 ---
 
@@ -23,10 +23,18 @@ Practical consequence: when the engine lacks the data to compute something
 correctly, it emits `FAIL` rather than a plausible default. A number nobody can
 defend at validation is worse than no number.
 
-The same rule governs judgement, not just arithmetic. The ESG module does not
-invent risks. The not-applicable pass does not touch safeguards sections. The
-auditor detects gaps deterministically and lets a model explain them, never the
-reverse.
+The same rule governs judgement, not just arithmetic:
+
+- **Module 5 does not invent ESG risks.** Identifying risks and scoring
+  severity are site-specific judgements about real people and ecosystems. The
+  engine supplies the matrix, the category registry, and the completeness
+  checks.
+- **The not-applicable pass does not touch safeguards sections**, and is
+  technology-aware: "no capacity limit applies" is true for solar and false for
+  hydro.
+- **The auditor detects gaps deterministically** and lets a model explain them,
+  never the reverse. Two runs on the same project must not disagree about
+  whether it is ready for validation.
 
 ---
 
@@ -69,7 +77,7 @@ Interactive API docs at http://127.0.0.1:8000/docs
 pytest -q
 ```
 
-Expect `267 passed`. If you see `240 passed, 27 skipped`, Postgres is not
+Expect `331 passed`. If you see `304 passed, 27 skipped`, Postgres is not
 reachable — the endpoint tests skip rather than fail so the domain suite still
 gives a signal without Docker. `pytest -q -rs` prints the skip reason.
 
@@ -104,7 +112,7 @@ app/
   domain/      pure calculation engines — no DB, no LLM, fully unit-tested
   schemas/     Pydantic request/response models
   api/         FastAPI routers and dependencies
-  services/    docx rendering, PDD builder, auditor, audit trail
+  services/    docx rendering, document builders, auditor, audit trail
   data/        reference tables (LDC list, World Bank income groups)
   templates/   the 13 official Verra v5.0A/5.0B .docx templates
 migrations/    Alembic — the only way the schema changes
@@ -128,9 +136,9 @@ its results are reproducible.
 | 3 | PDD Builder (official template, filled in place) | **done** |
 | 4 | Monitoring Plan & Data/Parameters | **done** |
 | 5 | ESG Risk Assessment | **done** (docx rendering pending) |
-| 6 | Monitoring Report Generator | not started |
+| 6 | Monitoring Report Generator | **done** |
 | 7 | Compliance Engine, Traceability & Auditor | **done** |
-| 8 | Regulatory Updates Tracking | not started |
+| 8 | Regulatory Updates Tracking | **done** |
 
 ### What each domain module does
 
@@ -157,12 +165,22 @@ practice F factor with footnote 17 handled.
 mandated embodied-emission-factor defaults table. Conditional parameters:
 `EFRes` for hydro, `GWPagent` and `Me,released,y` for battery storage.
 
+**`monitoring_report.py`** — ex-post quantification from metered generation;
+monitoring period bounds; period continuity (a gap forfeits credits, an overlap
+double-issues); meter calibration currency and uncertainty; data-gap handling
+via the VT0010 route; ex-ante versus ex-post variance.
+
 **`esg.py`** — the 5x5 severity/likelihood matrix transcribed from the ESG
 template, all twelve safeguard categories with clause references, and
 s3.18.1(2) commensurate-mitigation checks.
 
 **`compliance.py`** — twenty VCS v5.0 requirements mapped to the findings that
 evidence them, four statuses, and the traceability matrix CSV export.
+
+**`regulatory.py`** — eleven regulatory documents mapped to thirty-nine code
+dependencies at constant and function level, SHA-256 integrity checking of
+vendored templates, and `assess_update(doc, version)` returning a
+re-verification checklist.
 
 **`pdd_content.py` / `pdd_applicability.py`** — assembles field values and
 prose for the Project Description, including a technology-aware
@@ -192,8 +210,7 @@ number or a behaviour that looked correct beforehand.
    term. A PDD migrated from ACM0002 will be missing it. The engine blocks
    rather than defaulting it to zero.
 5. **Additional is not the same as CCP-eligible.** VT0008 s5.4.2 condition (a)
-   establishes additionality; (b) and (c) govern CCP label eligibility. A
-   project can be additional yet ineligible for CCP labels.
+   establishes additionality; (b) and (c) govern CCP label eligibility.
 6. **Non-permanence risk applies only to carbon sinks** (VCS Standard v5.0
    s3.2.8). Fossil-CO2 displacement is exempt — which is why the
    not-applicable pass can safely mark it N/A for solar and wind, but not the
@@ -218,6 +235,7 @@ number or a behaviour that looked correct beforehand.
 - `audit_logs` is append-only. There is no application path that updates or
   deletes a row — it is the evidence trail a VVB inspects. Retention is handled
   by archival.
+- Cross-organization scoping is covered by endpoint tests.
 - Client data directories are gitignored.
 
 ### Transaction gotcha — read before touching `api/auth.py`
@@ -245,11 +263,19 @@ Ordered by how much they would hurt at validation.
 
 1. **TOOL07 is unverified.** VT0011 is a delta document — it replaces
    paragraphs 25, 26, 39, 45, 50, 72, 75, 79 and 86 of CDM TOOL07, but the core
-   OM/BM/CM equations live in TOOL07, which is not in the regulations pack. The
-   implementation follows the standard TOOL07 formulation and is marked
-   `UNVERIFIED` in source. Download TOOL07, check each docstring against it,
-   and record the check before any output reaches a client. **This is the only
-   remaining gap that code cannot close.**
+   OM/BM/CM equations live there, and TOOL07 is not in the regulations pack.
+   The implementation follows the standard TOOL07 formulation and is marked
+   `UNVERIFIED` in source. Module 8 reports this as a `FAIL` and names the
+   affected functions (`simple_om`, `average_om`, `build_margin`,
+   `check_simple_om_applicability`). **This is the only remaining gap that code
+   cannot close.**
+
+   ```bash
+   python -c "
+   from app.domain.regulatory import check_registry
+   [print(f.message) for f in check_registry() if f.check=='regulatory.unverified']"
+   ```
+
 2. **Dispatch data ingest not built.** The emission factor engine takes
    `PowerUnit` objects; nothing yet loads them from CEA or CERC sources.
 3. **No filled reference PDD.** The templates are blank. The generated prose is
@@ -258,18 +284,21 @@ Ordered by how much they would hurt at validation.
 4. **Benchmark IRR must be justified.** VT0008 Appendix 2 sA2.3 governs
    selection; a VVB will challenge an unsourced figure. Use CERC-approved
    return on equity, a WACC build-up, or bond yield plus a documented premium.
-5. **Annual estimates are held flat.** VT0011 para 72 Option 2 requires the
+5. **ESG docx rendering not built.** The ESG template's risk rows use dropdown
+   content controls, which need different handling from the PD template.
+6. **Annual estimates are held flat.** VT0011 para 72 Option 2 requires the
    build margin to be updated annually; per-year factors are needed before
    submission. The engine warns rather than hiding it.
-6. **ESG docx rendering not built.** The ESG template's risk rows use dropdown
-   content controls, which need different handling from the PD template.
 7. **Simple adjusted OM and dispatch data analysis raise `FAIL`.** Deliberate —
    they need the lambda split and hourly dispatch records respectively.
 8. **Sensitivity varies one parameter at a time.** VVBs increasingly ask for
    combined worst-case scenarios.
 9. **Multi-tenancy is application-layer**, not Postgres RLS. Cross-organization
-   scoping is now tested at the endpoint level, but one missing `.filter()` on
-   a future route would still leak.
+   scoping is tested at the endpoint level, but one missing `.filter()` on a
+   future route would still leak.
+10. **The ex-ante/ex-post variance threshold (10%) is a house heuristic**, not a
+    VCS requirement. It is labelled as such in the finding and its source, and
+    must never be quoted to a client as a rule.
 
 ---
 
@@ -292,8 +321,22 @@ the engine directly from `settings.database_url` rather than through
 chokes on the `%` in an encoded password. For the same reason `tests/conftest.py`
 uses `make_url(...).set(database=...)` rather than string surgery.
 
+**Verra's template filenames are inconsistently cased** — the Project
+Description ships as `v5.0A`, the Monitoring Report as `V5.0A`. macOS is
+case-insensitive and Linux is not, so a name that works locally can fail in
+Docker or CI. `services/pdd_builder._resolve` falls back to a case-insensitive
+match.
+
 **Scripts need the project root on the path:** `PYTHONPATH=. python scripts/...`
 
 **On Apple Silicon**, `postgis/postgis:15-3.4` runs under emulation
 (`linux/amd64` on `linux/arm64`). It works but is slower; worth revisiting if
 Postgres becomes sluggish or flaky under load.
+
+**Before changing a regulatory constant**, check what governs it:
+
+```bash
+python -c "
+from app.domain.regulatory import dependency_index
+print(dependency_index()['domain.constants.EI_MAX_TOTAL_CREDITING_YEARS'])"
+```
