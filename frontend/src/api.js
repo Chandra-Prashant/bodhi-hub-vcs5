@@ -19,14 +19,16 @@ export function hasToken() {
   return Boolean(accessToken);
 }
 
-async function request(path, { method = "GET", body, raw = false } = {}) {
+async function request(path, { method = "GET", body, raw = false, form } = {}) {
+  // A multipart body must NOT carry an explicit Content-Type — the browser has
+  // to set it so it can append the boundary token.
   const response = await fetch(BASE + path, {
     method,
     headers: {
-      "Content-Type": "application/json",
+      ...(form ? {} : { "Content-Type": "application/json" }),
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(form ? { body: form } : body ? { body: JSON.stringify(body) } : {}),
   });
 
   if (!response.ok) {
@@ -45,6 +47,11 @@ async function request(path, { method = "GET", body, raw = false } = {}) {
 }
 
 export const api = {
+  uploadDocument: (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request("/documents/upload", { method: "POST", form });
+  },
   login: (email, password) =>
     request("/auth/login", { method: "POST", body: { email, password } }),
   me: () => request("/auth/me"),
@@ -53,6 +60,13 @@ export const api = {
   traceabilityCsv: (payload) =>
     request("/assessment/traceability.csv", { method: "POST", body: payload, raw: true }),
   regulatoryStatus: () => request("/assessment/regulatory-status"),
+  documents: () => request("/documents"),
+  reviewQueue: () => request("/documents/queue"),
+  resolveReview: (itemId, state, correctedValue, note) =>
+    request(`/documents/review/${itemId}`, {
+      method: "POST",
+      body: { state, corrected_value: correctedValue ?? null, note: note ?? null },
+    }),
   esgSchema: () => request("/assessment/esg-schema"),
   esgReview: (payload) =>
     request("/assessment/esg-review", { method: "POST", body: payload }),

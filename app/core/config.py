@@ -1,8 +1,9 @@
 """Application configuration. All secrets come from the environment."""
 
 from __future__ import annotations
-from urllib.parse import quote_plus
+
 from functools import lru_cache
+from urllib.parse import quote_plus
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,18 @@ class Settings(BaseSettings):
     APP_NAME: str = "Bodhi Hub VCS 5.0"
     ENVIRONMENT: str = "development"
     API_V1_PREFIX: str = "/api/v1"
+
+    # Comma-separated. In production the frontend is served by this app, so the
+    # browser is same-origin and this list is normally empty.
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    # Directory holding the built frontend. Mounted only when it exists, so a
+    # developer running `uvicorn` without building the UI is unaffected.
+    STATIC_DIR: str = "frontend/dist"
+
+    # Architecture.md specifies S3-compatible object storage. Local disk for
+    # now, behind services.ingestion.storage_root so swapping it is one change.
+    UPLOAD_DIR: str = "uploads"
 
     # --- database ---
     POSTGRES_USER: str = "postgres"
@@ -48,16 +61,10 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        return (
-            f"postgresql+psycopg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
-            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        )
-
-    @property
-    def database_url(self) -> str:
-        # Credentials must be percent-encoded: an '@' or ':' in the password
-        # otherwise terminates the userinfo section early and the rest of the
-        # password gets parsed as the hostname.
+        # Credentials must be percent-encoded. An '@' or ':' in the password
+        # otherwise terminates the userinfo section early and the remainder is
+        # parsed as the hostname, which surfaces as a DNS failure
+        # ("nodename nor servname provided") rather than an auth error.
         return (
             f"postgresql+psycopg://{quote_plus(self.POSTGRES_USER)}:"
             f"{quote_plus(self.POSTGRES_PASSWORD)}"
@@ -65,10 +72,13 @@ class Settings(BaseSettings):
         )
 
     @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+
+    @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT.lower() in {"production", "prod"}
 
-    
 
 @lru_cache
 def get_settings() -> Settings:

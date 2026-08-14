@@ -21,28 +21,40 @@
    ========================================================================== */
 
 :root {
-  --ink: #131720;
-  --carbon: #1e242f;
-  --steel: #3a4453;
-  --mist: #edf0f4;
-  --chalk: #ffffff;
-  --flux: #4838d1;
-  --flux-soft: #ece9fb;
+  /* Design.md — client-specified palette. Replaces the earlier violet/slate
+     scheme so the app speaks one visual language rather than two. */
+  --primary: #2E7D32;        /* trust/climate green — Approve, Success */
+  --secondary: #1565C0;      /* accent */
+  --warn: #F9A825;           /* flagged, low confidence */
+  --fail: #C62828;           /* validation error */
+  --pass: #2E7D32;           /* approved */
+  --inert: #5F6368;          /* text secondary */
 
-  --pass: #12795b;
-  --warn: #a25e00;
-  --fail: #a5231c;
-  --inert: #6e7787;
+  --bg: #F7F9F7;             /* background */
+  --chalk: #FFFFFF;
+  --ink: #1A1A1A;            /* text primary */
+  --steel: #5F6368;
+  --mist: #EDF0ED;
 
-  --rule: #d5dce4;
-  --rule-strong: #b3bec9;
+  /* Kept for the dark navigation rail, which Design.md does not specify a
+     colour for — only that a left sidebar exists. */
+  --rail: #1A1A1A;
+  --carbon: #24272B;
+  --flux: #2E7D32;
+  --flux-soft: #E8F2E9;
 
-  --display: "Bricolage Grotesque", system-ui, sans-serif;
-  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --rule: #DADCE0;
+  --rule-strong: #BDC1C6;
+
+  /* Design.md: Inter or system-ui. Mono is retained for clause references and
+     figures — a VVB checks those character by character, and a proportional
+     face makes that harder. */
+  --display: "Inter", system-ui, sans-serif;
+  --body: "Inter", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
 
   --rail-w: 232px;
-  --step: 8px;
+  --step: 8px;               /* Design.md: consistent 8px spacing grid */
 }
 
 * { box-sizing: border-box; }
@@ -51,7 +63,7 @@ html, body, #root { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--mist);
+  background: var(--bg);
   color: var(--ink);
   font-family: var(--body);
   font-size: 14px;
@@ -565,3 +577,106 @@ button { font: inherit; cursor: pointer; }
 @media (max-width: 620px) {
   .esg__scores { grid-template-columns: minmax(0, 1fr); }
 }
+
+
+/* --- Design.md components ------------------------------------------------ */
+/*
+   Flag badges, review actions and the side-by-side preview, built to the
+   component specification in Design.md.
+*/
+
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 10px; border-radius: 999px;
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  letter-spacing: 0.04em; white-space: nowrap;
+}
+.badge--error { background: #FDECEA; color: var(--fail); }
+.badge--warning { background: #FEF7E0; color: #8A6100; }
+.badge--info { background: #E8F0FE; color: var(--secondary); }
+.badge--approved { background: var(--flux-soft); color: var(--primary); }
+.badge--edited { background: #E8F0FE; color: var(--secondary); }
+.badge--rejected { background: #FDECEA; color: var(--fail); }
+.badge--pending { background: var(--mist); color: var(--steel); }
+
+/* Design.md: primary filled green for Approve, outlined for Edit, text-only
+   for Reject. The visual weight is the affordance — the destructive action is
+   the least prominent. */
+.btn--approve {
+  background: var(--primary); border-color: var(--primary); color: #fff;
+}
+.btn--approve:hover { background: #256428; border-color: #256428; }
+.btn--edit {
+  background: transparent; border: 1px solid var(--rule-strong);
+  color: var(--ink);
+}
+.btn--edit:hover { border-color: var(--secondary); color: var(--secondary); }
+.btn--reject {
+  background: none; border: 1px solid transparent; color: var(--fail);
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.btn--reject:hover { background: #FDECEA; }
+
+.queue { display: flex; flex-direction: column; gap: 8px; }
+
+.qitem {
+  background: var(--chalk); border: 1px solid var(--rule);
+  border-left: 4px solid var(--rule-strong);
+  padding: 16px 18px;
+}
+.qitem--error { border-left-color: var(--fail); }
+.qitem--warning { border-left-color: var(--warn); }
+.qitem--info { border-left-color: var(--secondary); }
+
+.qitem__head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.qitem__field { font-weight: 600; font-size: 14px; }
+.qitem__reason { color: var(--steel); font-size: 13px; margin: 0 0 12px; }
+
+/* Design.md: side-by-side — extracted value on the left, what the document
+   actually says on the right, so a reviewer compares without reopening the
+   source file. */
+.qitem__compare {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  gap: 1px; background: var(--rule); border: 1px solid var(--rule);
+  margin-bottom: 12px;
+}
+.qitem__pane { background: var(--chalk); padding: 10px 12px; }
+.qitem__pane h5 {
+  margin: 0 0 5px; font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--inert);
+  font-weight: 500;
+}
+.qitem__value { font-family: var(--mono); font-size: 14px; font-weight: 600; }
+.qitem__quote { font-size: 13px; color: var(--ink); font-style: italic; }
+
+.qitem__actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.qitem__actions input {
+  font-family: var(--mono); font-size: 13px; padding: 7px 10px;
+  border: 1px solid var(--rule-strong); border-radius: 4px; min-width: 180px;
+}
+.qitem__actions input:focus {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--flux-soft);
+}
+
+.drop {
+  border: 2px dashed var(--rule-strong); border-radius: 8px;
+  background: var(--chalk); padding: 48px 24px; text-align: center;
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop--over { border-color: var(--primary); background: var(--flux-soft); }
+.drop h3 { font-size: 17px; margin: 0 0 6px; }
+.drop p { color: var(--steel); margin: 0 0 18px; font-size: 13px; }
+
+.uploads { margin-top: 24px; display: flex; flex-direction: column; gap: 8px; }
+.upload-row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--chalk); border: 1px solid var(--rule);
+  padding: 12px 16px; font-size: 13px;
+}
+.upload-row__name { font-weight: 500; }
+.upload-row__meta { margin-left: auto; display: flex; gap: 12px;
+  align-items: center; }

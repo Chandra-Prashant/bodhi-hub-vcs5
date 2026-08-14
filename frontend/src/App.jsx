@@ -3,6 +3,7 @@ import { api, downloadBlob, setToken } from "./api.js";
 import { sampleProject } from "./sample.js";
 import { DocumentPanel } from "./components/DocumentPanel.jsx";
 import { EsgEditor } from "./components/EsgEditor.jsx";
+import { ReviewQueue, UploadPanel } from "./components/ReviewPanels.jsx";
 import { Login, ProjectForm } from "./components/Forms.jsx";
 import {
   Additionality,
@@ -13,7 +14,10 @@ import {
   VerdictStrip,
 } from "./components/Panels.jsx";
 
+// Design.md: sidebar sections Uploads / Review Queue / Reports / Audit Log.
 const VIEWS = [
+  ["uploads", "Uploads"],
+  ["queue", "Review queue"],
   ["register", "Compliance register"],
   ["quantify", "Quantification"],
   ["additionality", "Additionality"],
@@ -37,6 +41,50 @@ export default function App() {
   const [esgSchema, setEsgSchema] = useState(null);
   const [esgReview, setEsgReview] = useState(null);
   const [esgBusy, setEsgBusy] = useState(false);
+  const [documents, setDocuments] = useState([]);
+  const [queue, setQueue] = useState([]);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [lastUpload, setLastUpload] = useState(null);
+
+  async function refreshIngestion() {
+    try {
+      const [docs, items] = await Promise.all([
+        api.documents(),
+        api.reviewQueue(),
+      ]);
+      setDocuments(docs);
+      setQueue(items);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function uploadDocument(file) {
+    setUploadBusy(true);
+    setError("");
+    try {
+      const result = await api.uploadDocument(file);
+      setLastUpload(result);
+      await refreshIngestion();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  async function resolveItem(item, state, correctedValue) {
+    setUploadBusy(true);
+    setError("");
+    try {
+      await api.resolveReview(item.id, state, correctedValue);
+      await refreshIngestion();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploadBusy(false);
+    }
+  }
 
   async function reviewEsg() {
     setEsgBusy(true);
@@ -118,6 +166,7 @@ export default function App() {
     if (!user) return;
     api.regulatoryStatus().then(setRegulatory).catch(() => setRegulatory(null));
     api.esgSchema().then(setEsgSchema).catch(() => setEsgSchema(null));
+    refreshIngestion();
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
@@ -209,7 +258,7 @@ export default function App() {
         <div className="canvas">
           {error && <div className="alert" style={{ marginBottom: 20 }}>{error}</div>}
 
-          {result &&
+          {result && view !== "uploads" && view !== "queue" &&
             (view === "register" ? (
               <Verdict result={result} />
             ) : (
@@ -256,6 +305,37 @@ export default function App() {
                 <span className="eyebrow">VT0008 v1.0</span>
               </div>
               <Additionality additionality={result.additionality} />
+            </section>
+          )}
+
+          {view === "uploads" && (
+            <section className="section">
+              <div className="section__head">
+                <h2>Uploads</h2>
+                <span className="eyebrow">extract · validate · flag</span>
+              </div>
+              <UploadPanel
+                documents={documents}
+                onUpload={uploadDocument}
+                busy={uploadBusy}
+                lastResult={lastUpload}
+              />
+            </section>
+          )}
+
+          {view === "queue" && (
+            <section className="section">
+              <div className="section__head">
+                <h2>Review queue</h2>
+                <span className="eyebrow">
+                  {queue.length} item{queue.length === 1 ? "" : "s"} pending
+                </span>
+              </div>
+              <ReviewQueue
+                items={queue}
+                onResolve={resolveItem}
+                busy={uploadBusy}
+              />
             </section>
           )}
 
