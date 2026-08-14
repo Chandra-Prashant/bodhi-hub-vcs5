@@ -77,10 +77,32 @@ def db_engine():
 
     engine = create_engine(_test_url())
 
+    # pgvector must exist before create_all, because the report index declares
+    # a Vector column. Without it the endpoint suite errors — and only when a
+    # module importing app.models.rag has run first, which reads as flakiness
+    # rather than a missing extension.
+    #
+    # A developer whose Postgres lacks pgvector should still get the rest of
+    # the endpoint tests, so the vector-backed tables are skipped rather than
+    # the session failing. The project's own Docker image installs pgvector,
+    # so this path is for local instances only.
     from app.core.database import Base
-    from app.models import user as _user  # noqa: F401  registers tables
+    from app.models import ingestion as _ingestion  # noqa: F401
+    from app.models import rag as _rag  # noqa: F401
+    from app.models import user as _user  # noqa: F401
 
-    Base.metadata.create_all(engine)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        tables = None
+    except Exception:  # noqa: BLE001 — extension unavailable, not an error here
+        vector_backed = {"report_chunks", "historical_reports"}
+        tables = [
+            table for name, table in Base.metadata.tables.items()
+            if name not in vector_backed
+        ]
+
+    Base.metadata.create_all(engine, tables=tables)
     yield engine
 
     engine.dispose()

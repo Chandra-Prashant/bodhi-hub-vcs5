@@ -19,6 +19,7 @@ from app.core.database import Base
 # A module missing from this list is invisible to autogenerate, which produces
 # an empty migration rather than an error.
 from app.models import ingestion as _ingestion  # noqa: F401
+from app.models import rag as _rag  # noqa: F401
 from app.models import user as _user  # noqa: F401
 
 config = context.config
@@ -52,6 +53,18 @@ def include_object(object, name, type_, reflected, compare_to) -> bool:
         return False
     return True
 
+def render_item(type_, obj, autogen_context):
+    """Emit the pgvector import alongside a Vector column.
+
+    Alembic renders the fully-qualified type name but does not add the import
+    for third-party column types, so a generated migration references
+    pgvector.sqlalchemy and then fails with NameError at upgrade time.
+    """
+    if type_ == "type" and obj.__class__.__module__.startswith("pgvector"):
+        autogen_context.imports.add("import pgvector.sqlalchemy")
+        return f"pgvector.sqlalchemy.Vector({obj.dim})"
+    return False
+
 
 def run_migrations_offline() -> None:
     context.configure(
@@ -60,6 +73,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         compare_type=True,
         include_object=include_object,
+        render_item=render_item,
         include_schemas=False,
     )
     with context.begin_transaction():
@@ -77,6 +91,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             include_object=include_object,
+            render_item=render_item,
             include_schemas=False,
         )
         with context.begin_transaction():
