@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from app.domain import constants as K
@@ -45,7 +47,7 @@ def _finding(findings, check):
 
 def test_irr_of_a_known_series():
     """-100 then 60, 60: IRR is 13.066%."""
-    assert irr([-100.0, 60.0, 60.0]) == pytest.approx(0.13066, abs=1e-4)
+    assert abs(irr([-100, 60, 60]) - Decimal("0.13066")) < Decimal("1e-4")
 
 
 def test_irr_returns_none_for_all_positive_flows():
@@ -57,13 +59,12 @@ def test_irr_returns_none_for_all_negative_flows():
 
 
 def test_npv_at_the_irr_is_zero():
-    flows = [-1000.0, 300.0, 400.0, 500.0]
-    r = irr(flows)
-    assert npv(flows, r) == pytest.approx(0.0, abs=1e-6)
+    flows = [-1000, 300, 400, 500]
+    assert abs(npv(flows, irr(flows))) < Decimal("1e-9")
 
 
 def test_npv_discounts_from_year_zero():
-    assert npv([-100.0, 110.0], 0.10) == pytest.approx(0.0, abs=1e-9)
+    assert npv([-100, 110], "0.10") == Decimal(0)
 
 
 # --- crediting period cap --------------------------------------------------
@@ -74,24 +75,23 @@ def test_credit_revenue_stops_at_fifteen_years():
     inputs = _inputs()
     flows, _ = build_cashflows(inputs, include_credits=True)
     credit_revenue = inputs.annual_credits_tco2e * inputs.credit_price_per_tco2e
-    year_15 = flows[15]
-    year_16 = flows[16]
-    assert year_15 - year_16 == pytest.approx(credit_revenue)
+    assert flows[15] - flows[16] == Decimal(str(credit_revenue))
 
 
 def test_requesting_21_years_is_truncated_with_a_warning():
     inputs = _inputs(crediting_years=21)
     flows, findings = build_cashflows(inputs, include_credits=True)
     assert _finding(findings, "vt0008.crediting_cap").severity is Severity.WARNING
-    credit_revenue = inputs.annual_credits_tco2e * inputs.credit_price_per_tco2e
-    assert flows[16] == pytest.approx(flows[20])  # no credits after year 15
-    assert flows[15] - flows[16] == pytest.approx(credit_revenue)
+    credit_revenue = Decimal(str(inputs.annual_credits_tco2e)) * \
+        Decimal(str(inputs.credit_price_per_tco2e))
+    assert flows[16] == flows[20]  # no credits after year 15
+    assert flows[15] - flows[16] == credit_revenue
 
 
 def test_residual_value_lands_in_the_final_year():
     inputs = _inputs(residual_value=1_000.0)
     flows, _ = build_cashflows(inputs, include_credits=False)
-    assert flows[25] - flows[24] == pytest.approx(1_000.0)
+    assert flows[25] - flows[24] == Decimal(1_000)
 
 
 # --- benchmark analysis, s5.4.2 -------------------------------------------
@@ -225,3 +225,55 @@ def test_all_findings_carry_a_source():
         _inputs(), n_all=5, n_diff=4,
         project_capacity_mw=50.0, regulatory_surplus=True)
     assert all(f.source for f in result.findings)
+
+
+
+# --- why this arithmetic is Decimal ---------------------------------------
+
+def test_the_float_equivalent_is_not_exact():
+    """The reason, stated as a test. In binary floating point 0.1 + 0.2 is not
+    0.3, and an IRR sits on a chain of such operations."""
+    assert 0.1 + 0.2 != 0.3
+    assert Decimal("0.1") + Decimal("0.2") == Decimal("0.3")
+
+
+def test_npv_at_zero_discount_is_the_plain_sum():
+    """Exactly, with no residue. The float version leaves a remainder around
+    1e-13, which is invisible until it lands next to a threshold."""
+    assert npv([Decimal("0.1")] * 3, 0) == Decimal("0.3")
+
+
+def test_the_verdict_is_reproducible():
+    """Same inputs, same verdict, every run — the property a VVB relies on
+    when re-performing a calculation."""
+    inputs = _inputs()
+    results = {benchmark_analysis(inputs).irr_without_credits
+               for _ in range(25)}
+    assert len(results) == 1
+
+
+def test_a_project_exactly_at_the_benchmark_is_not_additional():
+    """The boundary case. VT0008 s5.4.2(2)(a) requires the IRR to fall BELOW
+    the benchmark, so equality fails the condition — and equality is only a
+    meaningful concept because the comparison is exact."""
+    inputs = _inputs(capex=25_000.0)
+    computed = benchmark_analysis(inputs).irr_without_credits
+    at_benchmark = _inputs(capex=25_000.0, benchmark_irr=computed)
+    assert not benchmark_analysis(at_benchmark).passes_step3
+
+
+def test_a_hair_above_the_computed_irr_passes():
+    inputs = _inputs(capex=25_000.0)
+    computed = benchmark_analysis(inputs).irr_without_credits
+    just_above = _inputs(capex=25_000.0,
+                         benchmark_irr=computed + Decimal("1e-9"))
+    assert benchmark_analysis(just_above).passes_step3
+
+
+def test_decimal_and_float_inputs_agree():
+    """Callers pass floats through JSON; conversion goes via str() so the
+    decimal value the user typed is what is used."""
+    as_float = benchmark_analysis(_inputs(benchmark_irr=0.14))
+    as_string = benchmark_analysis(_inputs(benchmark_irr="0.14"))
+    assert as_float.benchmark_irr == as_string.benchmark_irr
+    assert as_float.passes_step3 == as_string.passes_step3

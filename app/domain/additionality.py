@@ -23,7 +23,30 @@ enforces the cap.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, getcontext
 from enum import Enum
+
+# The additionality verdict is a comparison of IRR against a benchmark. A
+# project sitting near the benchmark flips on a difference far smaller than
+# binary floating point can represent reliably — structurally the same failure
+# the PRD describes for profit and loss, where "a single wrong calculation can
+# flip a farm's profit/loss outcome".
+#
+# So the arithmetic that produces the verdict is Decimal end to end. Callers
+# may still pass floats (JSON has no other numeric type) and they are converted
+# through str(), which recovers the decimal value the user actually typed
+# rather than the binary approximation stored for it.
+getcontext().prec = 34
+
+
+def _d(value) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, int):
+        return Decimal(value)
+    # str() first: Decimal(0.1) is 0.1000000000000000055511151231257827,
+    # Decimal(str(0.1)) is exactly 0.1.
+    return Decimal(str(value))
 
 from app.domain import constants as K
 from app.domain.classification import Finding, Severity
@@ -54,26 +77,39 @@ class FinancialInputs:
     residual_value: float = 0.0
 
 
-def irr(cashflows: list[float], tol: float = 1e-9, max_iter: int = 300) -> float | None:
-    """Internal rate of return by bisection.
+IRR_TOLERANCE = Decimal("1e-12")
+
+
+def irr(cashflows, tol: Decimal | None = None,
+        max_iter: int = 400) -> Decimal | None:
+    """Internal rate of return by bisection, in Decimal.
 
     Bisection rather than Newton: it cannot diverge, and a financial figure a
-    VVB will scrutinise should fail by returning None rather than by silently
+    VVB will scrutinise should fail by returning None rather than silently
     landing on a spurious root.
+
+    The tolerance is tighter than the float version could meaningfully hold —
+    the point is that a project whose IRR differs from the benchmark in the
+    ninth decimal place gets the same verdict every run, on every machine.
     """
-    if not cashflows or all(c >= 0 for c in cashflows) or all(c <= 0 for c in cashflows):
+    flows = [_d(c) for c in cashflows]
+    tol = tol if tol is not None else IRR_TOLERANCE
+
+    if not flows or all(c >= 0 for c in flows) or all(c <= 0 for c in flows):
         return None
 
-    def npv_at(rate: float) -> float:
-        return sum(cf / (1.0 + rate) ** t for t, cf in enumerate(cashflows))
+    def npv_at(rate: Decimal) -> Decimal:
+        return sum((cf / (Decimal(1) + rate) ** t
+                    for t, cf in enumerate(flows)), Decimal(0))
 
-    low, high = -0.9999, 10.0
+    low, high = Decimal("-0.9999"), Decimal(10)
     f_low, f_high = npv_at(low), npv_at(high)
     if f_low * f_high > 0:
         return None
 
+    two = Decimal(2)
     for _ in range(max_iter):
-        mid = (low + high) / 2.0
+        mid = (low + high) / two
         f_mid = npv_at(mid)
         if abs(f_mid) < tol or (high - low) < tol:
             return mid
@@ -81,17 +117,19 @@ def irr(cashflows: list[float], tol: float = 1e-9, max_iter: int = 300) -> float
             high, f_high = mid, f_mid
         else:
             low, f_low = mid, f_mid
-    return (low + high) / 2.0
+    return (low + high) / two
 
 
-def npv(cashflows: list[float], discount_rate: float) -> float:
-    return sum(cf / (1.0 + discount_rate) ** t for t, cf in enumerate(cashflows))
+def npv(cashflows, discount_rate) -> Decimal:
+    rate = _d(discount_rate)
+    return sum((_d(cf) / (Decimal(1) + rate) ** t
+                for t, cf in enumerate(cashflows)), Decimal(0))
 
 
 def build_cashflows(
     inputs: FinancialInputs,
     include_credits: bool,
-) -> tuple[list[float], list[Finding]]:
+) -> tuple[list[Decimal], list[Finding]]:
     """Year 0 is capex; years 1..N are net operating cashflow.
 
     Credit revenue is truncated at the VCS v5.0 E&I crediting cap even when
@@ -108,16 +146,19 @@ def build_cashflows(
             K.CREDITING_PERIOD_SOURCE))
         crediting_years = K.EI_MAX_TOTAL_CREDITING_YEARS
 
-    energy_revenue = inputs.annual_generation_mwh * inputs.tariff_per_mwh
-    credit_revenue = inputs.annual_credits_tco2e * inputs.credit_price_per_tco2e
+    energy_revenue = _d(inputs.annual_generation_mwh) * _d(inputs.tariff_per_mwh)
+    credit_revenue = (_d(inputs.annual_credits_tco2e)
+                      * _d(inputs.credit_price_per_tco2e))
+    opex = _d(inputs.annual_opex)
+    residual = _d(inputs.residual_value)
 
-    flows = [-inputs.capex]
+    flows = [-_d(inputs.capex)]
     for year in range(1, inputs.project_lifetime_years + 1):
-        cf = energy_revenue - inputs.annual_opex
+        cf = energy_revenue - opex
         if include_credits and year <= crediting_years:
             cf += credit_revenue
         if year == inputs.project_lifetime_years:
-            cf += inputs.residual_value
+            cf += residual
         flows.append(cf)
 
     return flows, findings
@@ -125,11 +166,14 @@ def build_cashflows(
 
 @dataclass
 class InvestmentAnalysisResult:
-    irr_without_credits: float | None
-    irr_with_credits: float | None
-    npv_without_credits: float
-    npv_with_credits: float
-    benchmark_irr: float
+    """Figures are Decimal. Convert at a display boundary if a float is needed —
+    the comparison that decides additionality has already happened by then."""
+
+    irr_without_credits: Decimal | None
+    irr_with_credits: Decimal | None
+    npv_without_credits: Decimal
+    npv_with_credits: Decimal
+    benchmark_irr: Decimal
     passes_step3: bool           # s5.4.2(2)(a) — the additionality condition
     meets_ccp_conditions: bool   # s5.4.2(2)(b) and (c) — CCP label eligibility
     findings: list[Finding] = field(default_factory=list)
@@ -154,6 +198,7 @@ def benchmark_analysis(inputs: FinancialInputs) -> InvestmentAnalysisResult:
     irr_with = irr(flows_with)
     npv_without = npv(flows_without, inputs.discount_rate)
     npv_with = npv(flows_with, inputs.discount_rate)
+    benchmark = _d(inputs.benchmark_irr)
 
     if irr_without is None:
         findings.append(Finding(
@@ -164,16 +209,16 @@ def benchmark_analysis(inputs: FinancialInputs) -> InvestmentAnalysisResult:
             f"{VT0008} s5.4.2"))
         passes = True
     else:
-        passes = irr_without < inputs.benchmark_irr
+        passes = irr_without < benchmark
         findings.append(Finding(
             "vt0008.step3.benchmark", Severity.PASS if passes else Severity.FAIL,
             f"IRR without credits {irr_without:.2%} vs benchmark "
-            f"{inputs.benchmark_irr:.2%} — condition (a) "
+            f"{benchmark:.2%} — condition (a) "
             f"{'met' if passes else 'NOT met'}.", f"{VT0008} s5.4.2(2)(a)"))
 
     ccp_b = (irr_with is not None and irr_without is not None
              and irr_with > irr_without)
-    ccp_c = irr_with is not None and irr_with >= inputs.benchmark_irr
+    ccp_c = irr_with is not None and irr_with >= benchmark
     meets_ccp = bool(ccp_b and ccp_c)
 
     if passes and not meets_ccp:
@@ -181,7 +226,7 @@ def benchmark_analysis(inputs: FinancialInputs) -> InvestmentAnalysisResult:
         findings.append(Finding(
             "vt0008.step3.ccp", Severity.WARNING,
             f"Conditions (b)/(c) not both met (IRR with credits "
-            f"{with_txt} vs benchmark {inputs.benchmark_irr:.2%}). The "
+            f"{with_txt} vs benchmark {benchmark:.2%}). The "
             f"project remains additional but may be ineligible for CCP labels.",
             f"{VT0008} s5.4.2 note"))
     elif meets_ccp:
@@ -196,7 +241,7 @@ def benchmark_analysis(inputs: FinancialInputs) -> InvestmentAnalysisResult:
         irr_with_credits=irr_with,
         npv_without_credits=npv_without,
         npv_with_credits=npv_with,
-        benchmark_irr=inputs.benchmark_irr,
+        benchmark_irr=benchmark,
         passes_step3=passes,
         meets_ccp_conditions=meets_ccp,
         findings=findings,
@@ -222,10 +267,12 @@ def sensitivity_analysis(
     robust = True
 
     for field_name, delta in variations.items():
-        for direction, label in ((1 + delta, "+"), (1 - delta, "-")):
+        step = _d(delta)
+        for direction, label in ((Decimal(1) + step, "+"),
+                                 (Decimal(1) - step, "-")):
             perturbed = FinancialInputs(**{
                 **inputs.__dict__,
-                field_name: getattr(inputs, field_name) * direction,
+                field_name: _d(getattr(inputs, field_name)) * direction,
             })
             result = benchmark_analysis(perturbed)
             if not result.passes_step3:
@@ -234,7 +281,7 @@ def sensitivity_analysis(
                     "vt0008.step3.sensitivity", Severity.FAIL,
                     f"{label}{delta:.0%} on {field_name}: IRR without credits "
                     f"reaches {result.irr_without_credits:.2%}, meeting the "
-                    f"{inputs.benchmark_irr:.2%} benchmark. Condition (a) "
+                    f"{_d(inputs.benchmark_irr):.2%} benchmark. Condition (a) "
                     f"fails under this variation.", f"{VT0008} s5.4.2(3)"))
 
     if robust:

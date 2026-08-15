@@ -33,6 +33,12 @@ from app.schemas.ingestion import (
     ReviewItemOut,
     UploadResponse,
 )
+from app.services.handover import (
+    HandoverRefused,
+    build_assessment_payload,
+    latest_extraction_for,
+    resolve_values,
+)
 from app.services.ingestion import (
     UploadRejected,
     ingest,
@@ -161,3 +167,56 @@ def resolve(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=str(exc))
     return resolved
+
+
+@router.post("/{document_id}/assess")
+def assess_document(
+    document_id: uuid.UUID,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Run the assessment on a reviewed document — the join between halves.
+
+    Reviewer corrections are applied over the extracted values, rejected values
+    are dropped, and unresolved blocking items refuse the handover. What comes
+    back is the same consolidated view as POST /assessment/run, plus a record
+    of what the review changed on the way through.
+    """
+    from app.api.assessment import _run
+    from app.schemas.assessment import AssessmentRequest, AssessmentResponse
+    from app.services import audit
+
+    extraction = None
+    try:
+        extraction = latest_extraction_for(db, document_id, user.organization)
+        handover = resolve_values(db, extraction)
+        payload = build_assessment_payload(handover)
+    except HandoverRefused as exc:
+        audit.record(
+            db, action="assessment.handover_refused", outcome=audit.FAILURE,
+            actor_email=user.email, organization=user.organization,
+            user_id=user.id, resource_type="document",
+            resource_id=str(document_id), request=request, note=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc))
+
+    result = AssessmentResponse.of(*_run(AssessmentRequest(**payload)))
+
+    audit.record(
+        db, action="assessment.run_from_document", outcome=audit.SUCCESS,
+        actor_email=user.email, organization=user.organization,
+        user_id=user.id, resource_type="document", resource_id=str(document_id),
+        request=request,
+        # Field names and counts only — never the values.
+        detail={
+            "extraction_id": str(extraction.id),
+            "corrections_applied": handover.corrections_applied,
+            "ready_for_validation": result.ready_for_validation,
+        })
+
+    return {
+        "assessment": result.model_dump(mode="json"),
+        "corrections_applied": handover.corrections_applied,
+        "notes": handover.notes,
+    }

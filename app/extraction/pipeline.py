@@ -18,6 +18,11 @@ from abc import ABC, abstractmethod
 from datetime import date
 from pathlib import Path
 
+from app.extraction.documents import (
+    DocumentContent,
+    UnsupportedDocument,
+    load_document,
+)
 from app.extraction.guards import assert_extraction_safe
 from app.extraction.schema import (
     Confidence,
@@ -61,14 +66,34 @@ Rules, without exception:
 """
 
 
+IMAGE_INSTRUCTION = """\
+The document is supplied as an image of a form. Read the values written on it.
+
+Lower your score wherever handwriting is unclear, a field is partly obscured,
+a digit could be read two ways, or a box is ticked ambiguously. A misread digit
+in a figure is the failure this whole system exists to prevent, so an honest
+low score is far more useful than a confident guess — a low score sends the
+field to a person, and a wrong value with a high score does not.
+
+Copy into source_text what you can actually see near the value, so a reviewer
+can check your reading against the image.
+"""
+
+
 class Extractor(ABC):
     """The model boundary. Everything else in this module is deterministic."""
 
     name = "abstract"
 
     @abstractmethod
-    def complete(self, system: str, document_text: str) -> str:
-        """Return the model's raw JSON response."""
+    def complete(self, system: str, document_text: str,
+                 image: bytes | None = None, media_type: str = "") -> str:
+        """Return the model's raw JSON response.
+
+        `image` carries a photographed or scanned form. Reading one is
+        extraction, which Rules.md already grants the model — not a separate
+        OCR stage.
+        """
 
 
 class GeminiExtractor(Extractor):
@@ -79,72 +104,30 @@ class GeminiExtractor(Extractor):
         self.model = model
         self.name = model
 
-    def complete(self, system: str, document_text: str) -> str:
+    def complete(self, system: str, document_text: str,
+                 image: bytes | None = None, media_type: str = "") -> str:
         from google import genai
+        from google.genai import types
 
         client = genai.Client(api_key=self.api_key)
+
+        if image is not None:
+            parts = [
+                types.Part.from_text(
+                    text=f"{system}\n\n{IMAGE_INSTRUCTION}"),
+                types.Part.from_bytes(data=image,
+                                      mime_type=media_type or "image/jpeg"),
+            ]
+        else:
+            parts = [types.Part.from_text(
+                text=f"{system}\n\n--- DOCUMENT ---\n{document_text}")]
+
         response = client.models.generate_content(
             model=self.model,
-            contents=f"{system}\n\n--- DOCUMENT ---\n{document_text}",
+            contents=parts,
             config={"response_mime_type": "application/json"},
         )
         return response.text
-
-
-# ---------------------------------------------------------------------------
-# Document loading
-# ---------------------------------------------------------------------------
-
-
-class UnsupportedDocument(Exception):
-    pass
-
-
-def load_text(path: Path) -> tuple[str, int]:
-    """Return (text, page_count).
-
-    Raises rather than returning empty text for a readable-but-empty document:
-    a scanned PDF with no text layer needs OCR, and silently treating it as an
-    empty document would produce a confident extraction of nothing.
-    """
-    suffix = path.suffix.lower()
-
-    if suffix == ".pdf":
-        from pypdf import PdfReader
-
-        reader = PdfReader(str(path))
-        pages = [(page.extract_text() or "") for page in reader.pages]
-        text = "\n\n".join(
-            f"[page {i}]\n{content}" for i, content in enumerate(pages, 1)
-        )
-        if not any(p.strip() for p in pages):
-            raise UnsupportedDocument(
-                f"{path.name} has no extractable text layer. It is probably a "
-                f"scan and needs OCR before extraction.")
-        return text, len(pages)
-
-    if suffix in {".docx", ".doc"}:
-        import docx
-
-        document = docx.Document(str(path))
-        parts = [p.text for p in document.paragraphs if p.text.strip()]
-        parts += [
-            " | ".join(c.text.strip() for c in row.cells)
-            for table in document.tables for row in table.rows
-        ]
-        if not parts:
-            raise UnsupportedDocument(f"{path.name} contains no text.")
-        return "\n".join(parts), 1
-
-    if suffix in {".txt", ".md"}:
-        text = path.read_text(errors="replace")
-        if not text.strip():
-            raise UnsupportedDocument(f"{path.name} is empty.")
-        return text, 1
-
-    raise UnsupportedDocument(
-        f"{path.suffix or 'file'} is not a supported document type. "
-        f"Supported: .pdf, .docx, .txt, .md")
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +211,7 @@ def extract(
     flagged for manual entry rather than the failure disappearing.
     """
     try:
-        text, pages = load_text(path)
+        content: DocumentContent = load_document(path)
     except UnsupportedDocument as exc:
         return ExtractionResult(
             document_name=path.name, status=ExtractionStatus.FAILED,
@@ -238,8 +221,10 @@ def extract(
             document_name=path.name, status=ExtractionStatus.FAILED,
             error=f"Could not read {path.name}: {exc}", model=extractor.name)
 
+    pages = content.pages
     try:
-        response = extractor.complete(SYSTEM_PROMPT, text)
+        response = extractor.complete(
+            SYSTEM_PROMPT, content.text, content.image, content.media_type)
     except Exception as exc:  # noqa: BLE001
         return ExtractionResult(
             document_name=path.name, status=ExtractionStatus.FAILED,

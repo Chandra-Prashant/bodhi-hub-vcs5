@@ -144,7 +144,13 @@ def chunk_text(text: str, source: str = "") -> list[Chunk]:
 
 
 def chunk_file(path: Path) -> list[Chunk]:
-    from app.extraction.pipeline import load_text
+    from app.extraction.documents import UnsupportedDocument, load_document
 
-    text, _pages = load_text(path)
-    return chunk_text(text, source=path.name)
+    content = load_document(path)
+    if content.is_image:
+        # An image has no text to chunk. Indexing it would add an empty entry
+        # to the style corpus, which is worse than skipping it loudly.
+        raise UnsupportedDocument(
+            f"{path.name} is an image. The style corpus needs text; run it "
+            f"through extraction instead.")
+    return chunk_text(content.text, source=path.name)

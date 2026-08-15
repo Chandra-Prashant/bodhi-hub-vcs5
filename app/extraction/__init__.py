@@ -5,12 +5,19 @@ from app.extraction.guards import (  # noqa: F401
     CalculatedFieldInSchema,
     assert_extraction_safe,
 )
+from app.extraction.documents import (  # noqa: F401
+    IMAGE_SUFFIXES,
+    SHEET_SUFFIXES,
+    SUPPORTED_SUFFIXES,
+    TEXT_SUFFIXES,
+    DocumentContent,
+    UnsupportedDocument,
+    load_document,
+)
 from app.extraction.pipeline import (  # noqa: F401
     Extractor,
     GeminiExtractor,
-    UnsupportedDocument,
     extract,
-    load_text,
     parse_response,
 )
 from app.extraction.schema import (  # noqa: F401

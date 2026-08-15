@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.extraction.documents import SUPPORTED_SUFFIXES
 from app.extraction.pipeline import Extractor, extract
 from app.extraction.schema import ExtractionStatus
 from app.models.ingestion import (
@@ -36,7 +37,9 @@ from app.services import audit
 from app.validation.validator import validate_extraction
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-ALLOWED_SUFFIXES = {".pdf", ".docx", ".doc", ".txt", ".md"}
+# Kept in step with what the extractor can actually read, so the gate and the
+# pipeline cannot disagree about what is accepted.
+ALLOWED_SUFFIXES = SUPPORTED_SUFFIXES
 
 # Rules.md: "Always validate and sanitize uploaded file contents before
 # processing." A filename arrives from a browser and is used to build a path.

@@ -19,12 +19,16 @@ from app.extraction.guards import (
     CalculatedFieldInSchema,
     assert_extraction_safe,
 )
+from app.extraction.documents import (
+    SUPPORTED_SUFFIXES,
+    UnsupportedDocument,
+    load_document,
+)
 from app.extraction.pipeline import (
+    IMAGE_INSTRUCTION,
     SYSTEM_PROMPT,
     Extractor,
-    UnsupportedDocument,
     extract,
-    load_text,
     parse_response,
 )
 from app.extraction.schema import (
@@ -44,11 +48,16 @@ class FakeExtractor(Extractor):
         self.response = response
         self.raises = raises
         self.last_document = ""
+        self.last_image: bytes | None = None
+        self.last_media_type = ""
 
-    def complete(self, system: str, document_text: str) -> str:
+    def complete(self, system: str, document_text: str,
+                 image: bytes | None = None, media_type: str = "") -> str:
         if self.raises:
             raise self.raises
         self.last_document = document_text
+        self.last_image = image
+        self.last_media_type = media_type
         return self.response
 
 
@@ -230,34 +239,35 @@ def test_source_text_is_retained_for_review():
 # --- document loading ------------------------------------------------------
 
 def test_a_text_document_loads(doc):
-    text, pages = load_text(doc)
-    assert "Aligarh" in text
-    assert pages == 1
+    content = load_document(doc)
+    assert "Aligarh" in content.text
+    assert content.pages == 1
+    assert not content.is_image
 
 
 def test_an_empty_document_is_refused(tmp_path):
     path = tmp_path / "blank.txt"
     path.write_text("   ")
     with pytest.raises(UnsupportedDocument, match="empty"):
-        load_text(path)
+        load_document(path)
 
 
 def test_an_unsupported_type_is_refused(tmp_path):
-    path = tmp_path / "photo.heic"
+    path = tmp_path / "archive.zip"
     path.write_bytes(b"\x00")
-    with pytest.raises(UnsupportedDocument, match="not a supported"):
-        load_text(path)
+    with pytest.raises(UnsupportedDocument, match="not supported"):
+        load_document(path)
 
 
 # --- failures never disappear ---------------------------------------------
 
 def test_an_unreadable_document_is_flagged_not_raised(tmp_path):
-    path = tmp_path / "scan.heic"
+    path = tmp_path / "archive.zip"
     path.write_bytes(b"\x00")
     result = extract(path, FakeExtractor())
     assert result.status is ExtractionStatus.FAILED
     assert result.requires_manual_entry
-    assert "not a supported" in result.error
+    assert "not supported" in result.error
 
 
 def test_a_model_failure_is_flagged(doc):
@@ -313,3 +323,88 @@ def test_the_document_text_reaches_the_model(doc):
     fake = FakeExtractor(response=_good_response())
     extract(doc, fake)
     assert "Aligarh" in fake.last_document
+
+
+
+# --- spreadsheets and images (PRD must-have ingestion formats) -------------
+
+def test_a_csv_loads_as_labelled_rows(tmp_path):
+    path = tmp_path / "farm.csv"
+    path.write_text("Field,Value\nCapacity MW,50\nGeneration MWh,87600\n")
+    content = load_document(path)
+    assert content.kind == "sheet"
+    assert "Capacity MW | 50" in content.text
+
+
+def test_an_empty_csv_is_refused(tmp_path):
+    path = tmp_path / "blank.csv"
+    path.write_text("\n\n")
+    with pytest.raises(UnsupportedDocument, match="no data rows"):
+        load_document(path)
+
+
+def test_an_image_loads_as_bytes_not_text(tmp_path):
+    path = tmp_path / "form.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200)
+    content = load_document(path)
+    assert content.is_image
+    assert content.kind == "image"
+    assert content.media_type == "image/png"
+    assert content.text == ""
+
+
+def test_an_empty_image_is_refused(tmp_path):
+    path = tmp_path / "form.png"
+    path.write_bytes(b"")
+    with pytest.raises(UnsupportedDocument, match="empty"):
+        load_document(path)
+
+
+def test_an_oversized_image_is_refused(tmp_path):
+    from app.extraction.documents import MAX_IMAGE_BYTES
+
+    path = tmp_path / "huge.jpg"
+    path.write_bytes(b"\xff" * (MAX_IMAGE_BYTES + 1))
+    with pytest.raises(UnsupportedDocument, match="Reduce the resolution"):
+        load_document(path)
+
+
+def test_an_image_reaches_the_model_as_vision_input(tmp_path):
+    path = tmp_path / "form.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200)
+    fake = FakeExtractor(response=_good_response())
+    extract(path, fake)
+    assert fake.last_image is not None
+    assert fake.last_media_type == "image/png"
+    assert fake.last_document == ""
+
+
+def test_the_image_instruction_asks_for_honest_low_scores():
+    """A wrong value with a high score never reaches a reviewer; a low score
+    does."""
+    lowered = IMAGE_INSTRUCTION.lower()
+    assert "handwriting is unclear" in lowered
+    assert "confident guess" in lowered
+
+
+@pytest.mark.parametrize("suffix", [".xlsx", ".csv", ".png", ".jpg", ".pdf"])
+def test_the_prd_ingestion_formats_are_all_accepted(suffix):
+    assert suffix in SUPPORTED_SUFFIXES
+
+
+def test_the_upload_gate_matches_what_the_extractor_reads():
+    """Two lists would drift, and the failure would be a file accepted at
+    upload and refused at extraction."""
+    from app.services.ingestion import ALLOWED_SUFFIXES
+
+    assert ALLOWED_SUFFIXES == SUPPORTED_SUFFIXES
+
+
+def test_an_image_is_not_indexed_into_the_style_corpus(tmp_path):
+    """It has no text; indexing it would add an empty entry."""
+    from app.rag.chunking import chunk_file
+
+    path = tmp_path / "form.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200)
+    with pytest.raises(UnsupportedDocument, match="style corpus needs text"):
+        chunk_file(path)

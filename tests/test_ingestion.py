@@ -28,7 +28,7 @@ class FakeExtractor(Extractor):
     def __init__(self, response="{}"):
         self.response = response
 
-    def complete(self, system, document_text):
+    def complete(self, system, document_text, image=None, media_type=""):
         return self.response
 
 
