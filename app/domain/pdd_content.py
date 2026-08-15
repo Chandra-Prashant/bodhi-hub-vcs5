@@ -404,6 +404,8 @@ def build_pdd_content(
     er: EmissionReductionResult | None = None,
     add: AdditionalityResult | None = None,
     monitoring: MonitoringParameters | None = None,
+    narrator=None,
+    retriever=None,
 ) -> PDDContent:
     identity = identity or ProjectIdentity()
     findings: list[Finding] = []
@@ -456,10 +458,40 @@ def build_pdd_content(
     _, na_findings = not_applicable_sections(intake, classification)
     findings.extend(na_findings)
 
+    sections = build_sections(intake, classification, ef, er, add, monitoring)
+
+    # Optional narrative pass. Without a narrator this is a no-op and the
+    # deterministic prose above is what the report contains — which is the
+    # current behaviour, byte for byte. With one, each section is redrafted in
+    # the firm's register while its figures are still inserted from the engine,
+    # and any section the model fails to produce falls back to the text it
+    # would have had anyway.
+    if narrator is not None:
+        from app.generation.bridge import (
+            SECTION_CLAUSES,
+            SECTION_PLACEHOLDERS,
+            briefs_from_sections,
+            build_value_bundle,
+        )
+        from app.generation.narrative import generate_report
+
+        bundle = build_value_bundle(intake, classification, ef, er, add)
+        briefs = briefs_from_sections(
+            sections, bundle, SECTION_PLACEHOLDERS, SECTION_CLAUSES)
+        generated = generate_report(briefs, bundle, narrator, retriever)
+
+        for section in generated.sections:
+            if section.text:
+                sections[section.heading] = section.text.split("\n\n")
+
+        for warning in generated.warnings:
+            findings.append(Finding(
+                "pdd.narrative", Severity.WARNING, warning, "Phase 6"))
+
     return PDDContent(
         template_version=classification.template_version,
         fields=build_fields(intake, classification, identity),
-        sections=build_sections(intake, classification, ef, er, add, monitoring),
+        sections=sections,
         annual_estimates=build_annual_estimates(classification, er),
         monitoring=monitoring,
         findings=findings,

@@ -259,3 +259,142 @@ def test_empty_sections_are_surfaced_as_warnings():
     brief = SectionBrief(heading="Site", instruction="Describe the site.")
     result = generate_report([brief], _bundle(), model=None)
     assert any("needs an author" in w for w in result.warnings)
+
+
+# --- the bridge into the report builder -----------------------------------
+
+from datetime import date  # noqa: E402
+
+from app.domain.classification import ProjectIntake, classify  # noqa: E402
+from app.domain.constants import Technology  # noqa: E402
+from app.domain.emission_factors import PowerUnit, grid_emission_factor  # noqa: E402
+from app.domain.baseline import emission_reductions  # noqa: E402
+from app.domain.pdd_content import ProjectIdentity, build_pdd_content  # noqa: E402
+from app.generation.bridge import (  # noqa: E402
+    SECTION_CLAUSES,
+    SECTION_PLACEHOLDERS,
+    briefs_from_sections,
+    build_value_bundle,
+)
+
+
+def _project():
+    intake = ProjectIntake(
+        name="Aligarh Solar One", proponent="Bodhi Hub Client",
+        country_iso2="IN", technology=Technology.SOLAR_PV_TERRESTRIAL,
+        installed_capacity_mw=50.0, expected_annual_generation_mwh=87_600.0,
+        initial_crediting_period_start=date(2026, 3, 1))
+    cls = classify(intake)
+    grid = [
+        PowerUnit("C1", 50_000, 2012, efficiency=0.35,
+                  efficiency_fuel_ef_t_per_gj=0.0946),
+        PowerUnit("C2", 30_000, 2021, efficiency=0.38,
+                  efficiency_fuel_ef_t_per_gj=0.0946),
+    ]
+    ef = grid_emission_factor(grid, intake.technology, 1)
+    er = emission_reductions(87_600, ef.ef_grid_cm, eg_facility_mwh=87_600,
+                             technology=intake.technology)
+    return intake, cls, ef, er
+
+
+def test_the_bundle_carries_engine_figures():
+    intake, cls, ef, er = _project()
+    bundle = build_value_bundle(intake, cls, ef, er)
+    assert bundle.values["capacity_mw"] == "50 MW"
+    assert "tCO2/MWh" in bundle.values["ef_grid_cm"]
+    assert "tCO2e" in bundle.values["reductions_tco2e"]
+
+
+def test_percentages_are_formatted_here_not_in_prose():
+    """The model cannot multiply by 100 because it cannot write a number."""
+    from app.domain.additionality import FinancialInputs, assess_additionality
+
+    intake, cls, ef, er = _project()
+    add = assess_additionality(
+        FinancialInputs(capex=40_000, annual_opex=500,
+                        annual_generation_mwh=87_600, tariff_per_mwh=0.03,
+                        project_lifetime_years=25, discount_rate=0.10,
+                        benchmark_irr=0.14, credit_price_per_tco2e=0.008,
+                        annual_credits_tco2e=er.emission_reductions_tco2e),
+        n_all=10, n_diff=9, project_capacity_mw=50.0, regulatory_surplus=True)
+    bundle = build_value_bundle(intake, cls, ef, er, add)
+    assert bundle.values["benchmark_irr"] == "14.00 %"
+
+
+def test_briefs_keep_the_deterministic_prose_as_fallback():
+    """Nothing is lost if the model is unavailable or writes badly."""
+    intake, cls, ef, er = _project()
+    bundle = build_value_bundle(intake, cls, ef, er)
+    sections = {"Baseline Emissions": ["BE_y is computed as follows."]}
+    briefs = briefs_from_sections(sections, bundle, SECTION_PLACEHOLDERS,
+                                  SECTION_CLAUSES)
+    assert briefs[0].fallback == "BE_y is computed as follows."
+
+
+def test_a_section_is_offered_only_its_own_figures():
+    """A model offered a figure it has no business mentioning will find a way
+    to mention it."""
+    intake, cls, ef, er = _project()
+    bundle = build_value_bundle(intake, cls, ef, er)
+    briefs = briefs_from_sections(
+        {"Project Emissions": ["Nil."]}, bundle,
+        SECTION_PLACEHOLDERS, SECTION_CLAUSES)
+    assert briefs[0].placeholders == ("project_tco2e",)
+
+
+def test_an_unlisted_section_is_offered_no_figures():
+    intake, cls, ef, er = _project()
+    bundle = build_value_bundle(intake, cls, ef, er)
+    briefs = briefs_from_sections({"Some New Section": ["Text."]}, bundle)
+    assert briefs[0].placeholders == ()
+
+
+def test_without_a_narrator_the_report_is_unchanged():
+    """The narrative pass must be a pure addition — no narrator, no
+    difference."""
+    intake, cls, ef, er = _project()
+    before = build_pdd_content(intake, cls, ProjectIdentity(), ef, er)
+    after = build_pdd_content(intake, cls, ProjectIdentity(), ef, er,
+                              narrator=None)
+    assert before.sections == after.sections
+
+
+def test_with_a_narrator_sections_are_redrafted():
+    intake, cls, ef, er = _project()
+    model = FakeModel("Baseline emissions are {{baseline_tco2e}} per year.")
+    content = build_pdd_content(intake, cls, ProjectIdentity(), ef, er,
+                                narrator=model)
+    text = " ".join(content.sections["Baseline Emissions"])
+    assert "tCO2e per year" in text
+    assert "{{" not in text
+
+
+def test_a_failing_model_leaves_the_deterministic_prose_intact():
+    intake, cls, ef, er = _project()
+    before = build_pdd_content(intake, cls, ProjectIdentity(), ef, er)
+    model = FakeModel("Baseline emissions are 73,438.5 tCO2e per year.")
+    after = build_pdd_content(intake, cls, ProjectIdentity(), ef, er,
+                              narrator=model)
+    assert after.sections["Baseline Emissions"] == \
+        before.sections["Baseline Emissions"]
+
+
+def test_template_text_may_contain_figures():
+    """The no-literal-numbers rule governs model output, not our own prose.
+    The quantification sections are arithmetic — verifying them would reject
+    the text the fallback exists to preserve."""
+    brief = SectionBrief(
+        heading="Baseline Emissions",
+        instruction="State the baseline.",
+        placeholders=("baseline_tco2e",),
+        fallback="BE_y = 87,600 MWh x 0.8383 tCO2/MWh = {{baseline_tco2e}}.")
+    section = generate_section(brief, _bundle(), model=None)
+    assert "87,600 MWh" in section.text
+    assert "73,438.5 tCO2e" in section.text
+
+
+def test_a_template_placeholder_the_engine_did_not_produce_still_raises():
+    brief = SectionBrief(heading="X", instruction="Y",
+                         fallback="Value is {{not_computed}}.")
+    with pytest.raises(UnknownPlaceholder):
+        generate_section(brief, _bundle(), model=None)

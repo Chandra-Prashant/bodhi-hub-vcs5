@@ -24,6 +24,7 @@ from app.generation.placeholders import (
     UnknownPlaceholder,
     ValueBundle,
     render,
+    substitute,
 )
 from app.rag.index import Retrieved, as_style_prompt
 
@@ -130,6 +131,21 @@ class GenerationResult:
 MAX_ATTEMPTS = 3
 
 
+def _render_fallback(text: str, bundle: ValueBundle) -> str:
+    """Substitute into template text WITHOUT the no-literal-numbers check.
+
+    That check exists to catch a model writing a figure it was told not to
+    write. Template text is ours: it is deterministic, clause-cited, and often
+    contains figures on purpose — the equations in the quantification sections
+    are literally arithmetic. Verifying it would reject the very prose the
+    fallback exists to preserve.
+
+    Placeholders are still substituted, and an unknown one still raises, so a
+    template referencing a value the engine did not produce fails loudly.
+    """
+    return substitute(text, bundle)
+
+
 def generate_section(
     brief: SectionBrief,
     bundle: ValueBundle,
@@ -152,7 +168,8 @@ def generate_section(
                 note="No model configured and no fallback text for this "
                      "section — it needs an author.")
         return GeneratedSection(
-            brief.heading, render(brief.fallback, bundle), used_model=False,
+            brief.heading, _render_fallback(brief.fallback, bundle),
+            used_model=False,
             note="Generated from the template without a model.")
 
     last_error = ""
@@ -175,8 +192,8 @@ def generate_section(
 
     if brief.fallback:
         return GeneratedSection(
-            brief.heading, render(brief.fallback, bundle), used_model=False,
-            attempts=MAX_ATTEMPTS,
+            brief.heading, _render_fallback(brief.fallback, bundle),
+            used_model=False, attempts=MAX_ATTEMPTS,
             note=f"Model output rejected {MAX_ATTEMPTS} times; template text "
                  f"used instead. Last reason: {last_error}")
 
