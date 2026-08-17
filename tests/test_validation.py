@@ -38,9 +38,12 @@ CLEAN = {
     "installed_capacity_mw": _f("50"),
     "expected_annual_generation_mwh": _f("87600"),
     "initial_crediting_period_start": _f("2026-03-01"),
+    # Both in lakh. The clean baseline previously mixed a lakh capital cost
+    # with a rupee tariff — the very error the payback rule now catches — so
+    # every test built on it was measuring against a faulty baseline.
     "capex": _f("40000"),
     "annual_opex": _f("500"),
-    "tariff_per_mwh": _f("3000"),
+    "tariff_per_mwh": _f("0.045"),
     "project_lifetime_years": _f("25"),
     "benchmark_irr": _f("0.14"),
 }
@@ -281,3 +284,71 @@ def test_rules_never_mutate_the_data():
     before = data.model_dump_json()
     validate(data)
     assert data.model_dump_json() == before
+
+
+# --- mixed currency scales (found on a real document) ---------------------
+
+def test_a_lakh_capex_against_a_rupee_tariff_is_caught():
+    """The Aligarh memorandum states "INR 40,000 lakh" and "INR 3,000 per MWh".
+    Neither figure is wrong alone; divided, the implied payback is days."""
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("3000"),
+                            annual_opex=_f("500")))
+    assert "consistency.payback_period" in _rule_ids(result)
+    assert not result.can_calculate
+
+
+def test_the_message_names_the_likely_cause():
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("3000")))
+    flag = next(f for f in result.flags
+                if f.rule_id == "consistency.payback_period")
+    assert "different scales" in flag.message
+    assert "lakh" in flag.message
+
+
+def test_consistent_units_pass():
+    """40,000 lakh capital cost against a 0.03 lakh/MWh tariff — payback about
+    eleven years, which is normal for utility-scale solar."""
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("0.045"),
+                            annual_opex=_f("500")))
+    assert "consistency.payback_period" not in _rule_ids(result)
+
+
+def test_an_implausibly_long_payback_warns_but_does_not_block():
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("0.005"),
+                            annual_opex=_f("100")))
+    flag = next((f for f in result.flags
+                 if f.rule_id == "consistency.payback_period"), None)
+    assert flag is not None and flag.severity is Severity.WARNING
+
+
+# --- a consistency finding implicates both sides --------------------------
+
+def test_both_sides_of_a_unit_mismatch_reach_the_queue():
+    """The rule is registered against capex, but the fault is as likely to be
+    in the tariff. Queuing only capex leaves the real correction unreachable."""
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("3000"),
+                            annual_opex=_f("500")))
+    queued = {i.field_name for i in result.review_items}
+    assert "capex" in queued
+    assert "tariff_per_mwh" in queued
+
+
+def test_the_secondary_field_says_why_it_is_queued():
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("3000")))
+    item = next(i for i in result.review_items
+                if i.field_name == "tariff_per_mwh")
+    assert "same finding as capex" in item.reason
+
+
+def test_a_capacity_factor_error_queues_the_capacity_too():
+    result = validate(_data(installed_capacity_mw=_f("50000")))
+    queued = {i.field_name for i in result.review_items}
+    assert "expected_annual_generation_mwh" in queued
+    assert "installed_capacity_mw" in queued
+
+
+def test_a_field_is_still_never_queued_twice():
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("3000"),
+                            annual_opex=_f("999999999")))
+    names = [i.field_name for i in result.review_items]
+    assert len(names) == len(set(names))

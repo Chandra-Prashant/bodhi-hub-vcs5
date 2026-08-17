@@ -178,3 +178,20 @@ def test_a_percentage_benchmark_is_converted_and_noted():
     payload = build_assessment_payload(handover)
     assert payload["financials"]["benchmark_irr"] == pytest.approx(0.14)
     assert any("percentage" in n for n in handover.notes)
+
+
+def test_the_payload_is_returned_so_the_form_can_show_it():
+    """A user seeing a result with no visible inputs cannot tell what the
+    system read, corrected or dropped."""
+    payload = build_assessment_payload(_handover())
+    for key in ("name", "proponent", "country_iso2", "technology",
+                "installed_capacity_mw", "expected_annual_generation_mwh",
+                "initial_crediting_period_start"):
+        assert key in payload
+
+
+def test_a_corrected_value_is_what_reaches_the_payload():
+    """The form must show the correction, not the original extraction."""
+    handover = _handover(country_iso2="in")
+    handover.corrections_applied.append("country_iso2")
+    assert build_assessment_payload(handover)["country_iso2"] == "IN"

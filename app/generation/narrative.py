@@ -73,9 +73,11 @@ class GeminiNarrator(NarrativeModel):
     def draft(self, system: str, brief: str) -> str:
         from google import genai
 
+        from app.services.retry import with_retry
+
         client = genai.Client(api_key=self.api_key)
-        response = client.models.generate_content(
-            model=self.model, contents=f"{system}\n\n{brief}")
+        response = with_retry(lambda: client.models.generate_content(
+            model=self.model, contents=f"{system}\n\n{brief}"))
         return response.text or ""
 
 

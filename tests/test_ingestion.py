@@ -99,3 +99,16 @@ def test_supported_types_pass(suffix):
 
 def test_the_allowed_list_excludes_executables():
     assert not {".exe", ".sh", ".js", ".html"} & ALLOWED_SUFFIXES
+
+
+# --- a failed extraction cannot be approved -------------------------------
+
+def test_the_failure_item_carries_its_rule_id():
+    """resolve_review_item keys on it to refuse approval."""
+    from app.extraction.schema import ExtractionResult, ExtractionStatus
+    from app.validation.validator import validate_extraction
+
+    result = validate_extraction(ExtractionResult(
+        document_name="d.pdf", status=ExtractionStatus.FAILED,
+        error="No text layer."))
+    assert any(i.rule_id == "extraction.failed" for i in result.review_items)

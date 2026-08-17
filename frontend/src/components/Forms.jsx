@@ -82,11 +82,14 @@ const TECHNOLOGIES = [
   ["TIDAL", "Tidal"],
 ];
 
-export function ProjectForm({ project, onChange, onRun, onExport, busy, hasResult }) {
+export function ProjectForm({
+  project, onChange, onRun, onExport, busy, hasResult,
+  runnable = true, onLoadSample, onClear,
+}) {
   const setFinance = (key) => (event) => {
     onChange({
       ...project,
-      financials: { ...project.financials, [key]: Number(event.target.value) },
+      financials: { ...(project.financials ?? {}), [key]: Number(event.target.value) },
     });
   };
 
@@ -243,7 +246,7 @@ export function ProjectForm({ project, onChange, onRun, onExport, busy, hasResul
       </fieldset>
 
       <div className="actions">
-        <button className="btn" onClick={onRun} disabled={busy}>
+        <button className="btn" onClick={onRun} disabled={busy || !runnable}>
           {busy ? "Running…" : "Run assessment"}
         </button>
         <button
@@ -253,7 +256,24 @@ export function ProjectForm({ project, onChange, onRun, onExport, busy, hasResul
         >
           Export traceability matrix
         </button>
+        {onLoadSample && (
+          <button className="btn btn--ghost" onClick={onLoadSample}
+                  disabled={busy}>
+            Load sample project
+          </button>
+        )}
+        {onClear && project.name && (
+          <button className="btn btn--reject" onClick={onClear} disabled={busy}>
+            Clear
+          </button>
+        )}
       </div>
+      {!runnable && (
+        <p className="field__hint" style={{ marginTop: 10 }}>
+          Name, proponent, host country, capacity, generation and the crediting
+          period start are all needed before an assessment can run.
+        </p>
+      )}
     </div>
   );
 }

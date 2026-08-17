@@ -1,8 +1,50 @@
 /**
- * A worked example: 50 MW solar in Uttar Pradesh on a coal-heavy grid.
+ * Starting state, and an optional demo project.
  *
- * Real numbers, not placeholders — the grid units produce a combined margin
- * around 0.84 tCO2/MWh, which is where the Indian grid actually sits.
+ * The app opens EMPTY. Nothing is loaded, no assessment runs, and the header
+ * shows no project until one exists — a tool that greets a new user with
+ * somebody else's numbers is one they cannot trust, because they have no way
+ * to tell which figures on screen are theirs.
+ *
+ * The sample is kept behind an explicit action for demos and for exercising
+ * the assessment views without an upload.
+ */
+
+export const emptyProject = {
+  name: "",
+  proponent: "",
+  country_iso2: "",
+  technology: "SOLAR_PV_TERRESTRIAL",
+  installed_capacity_mw: "",
+  expected_annual_generation_mwh: "",
+  initial_crediting_period_start: "",
+  crediting_period_ordinal: 1,
+  grid_connected: true,
+  has_bess: false,
+  grid_units: [],
+  financials: null,
+  similar_projects_all: 0,
+  similar_projects_distinct: 0,
+  regulatory_surplus: true,
+  esg_entries: [],
+};
+
+/** Whether enough is filled in to run an assessment at all. */
+export function isRunnable(project) {
+  return Boolean(
+    project.name &&
+      project.proponent &&
+      project.country_iso2 &&
+      project.installed_capacity_mw &&
+      project.expected_annual_generation_mwh &&
+      project.initial_crediting_period_start
+  );
+}
+
+/**
+ * A worked example: 50 MW solar in Uttar Pradesh on a coal-heavy grid.
+ * Real numbers — the grid units give a combined margin around 0.84 tCO2/MWh,
+ * which is roughly where the Indian grid sits.
  */
 export const sampleProject = {
   name: "Aligarh Solar One",

@@ -72,7 +72,12 @@ class FinancialInputs:
     discount_rate: float                  # for NPV
     benchmark_irr: float                  # required financial benchmark
     credit_price_per_tco2e: float = 0.0
-    annual_credits_tco2e: float = 0.0
+    # None means "not yet known" — distinct from zero. Without grid dispatch
+    # data there is no credit volume, but condition (a) of VT0008 s5.4.2 is the
+    # return WITHOUT credit revenue and can still be tested. Treating unknown
+    # as zero would silently report irr_with_credits equal to irr_without and
+    # evaluate the CCP conditions against a number that means nothing.
+    annual_credits_tco2e: float | None = 0.0
     crediting_years: int = K.EI_MAX_TOTAL_CREDITING_YEARS
     residual_value: float = 0.0
 
@@ -147,8 +152,9 @@ def build_cashflows(
         crediting_years = K.EI_MAX_TOTAL_CREDITING_YEARS
 
     energy_revenue = _d(inputs.annual_generation_mwh) * _d(inputs.tariff_per_mwh)
-    credit_revenue = (_d(inputs.annual_credits_tco2e)
-                      * _d(inputs.credit_price_per_tco2e))
+    credit_revenue = (
+        Decimal(0) if inputs.annual_credits_tco2e is None
+        else _d(inputs.annual_credits_tco2e) * _d(inputs.credit_price_per_tco2e))
     opex = _d(inputs.annual_opex)
     residual = _d(inputs.residual_value)
 
@@ -195,10 +201,25 @@ def benchmark_analysis(inputs: FinancialInputs) -> InvestmentAnalysisResult:
     findings.extend(f for f in with_findings if f not in findings)
 
     irr_without = irr(flows_without)
-    irr_with = irr(flows_with)
+    credits_known = inputs.annual_credits_tco2e is not None
+    irr_with = irr(flows_with) if credits_known else None
     npv_without = npv(flows_without, inputs.discount_rate)
     npv_with = npv(flows_with, inputs.discount_rate)
     benchmark = _d(inputs.benchmark_irr)
+
+    if irr_without is None and any(c > 0 for c in flows_without) \
+            and any(c < 0 for c in flows_without):
+        # The cashflows do change sign, so a rate exists — it simply lies
+        # outside the search range. In practice that means the inputs are on
+        # different scales: capital cost in lakh against a tariff in rupees,
+        # for instance, which makes revenue thousands of times the investment.
+        findings.append(Finding(
+            "vt0008.irr_out_of_range", Severity.FAIL,
+            "The project return could not be computed: it lies outside a "
+            "plausible range (-99% to 1000%). Check that capital cost, "
+            "operating cost and tariff are all stated in the same units — a "
+            "cost in lakh against a tariff in rupees produces exactly this.",
+            f"{VT0008} s5.4.2"))
 
     if irr_without is None:
         findings.append(Finding(
@@ -218,7 +239,16 @@ def benchmark_analysis(inputs: FinancialInputs) -> InvestmentAnalysisResult:
 
     ccp_b = (irr_with is not None and irr_without is not None
              and irr_with > irr_without)
-    ccp_c = irr_with is not None and irr_with >= benchmark
+    if not credits_known:
+        findings.append(Finding(
+            "vt0008.credits_unknown", Severity.WARNING,
+            "Credit volume is not yet known, so the return with credit revenue "
+            "and the CCP conditions (b) and (c) could not be tested. Condition "
+            "(a), which governs additionality itself, does not depend on it. "
+            "Supply the grid dispatch data to complete the analysis.",
+            f"{VT0008} s5.4.2(2)"))
+
+    ccp_c = credits_known and irr_with is not None and irr_with >= benchmark
     meets_ccp = bool(ccp_b and ccp_c)
 
     if passes and not meets_ccp:

@@ -34,8 +34,13 @@ const STATUS_CLASS = {
   UPLOADED: "pending",
 };
 
-export function UploadPanel({ documents, onUpload, busy, lastResult }) {
+export function UploadPanel({ documents, onUpload, onAssess, onDelete, busy,
+                             lastResult, assessingId }) {
   const [over, setOver] = useState(false);
+  // Which row is asking for confirmation. Inline rather than a browser dialog:
+  // the row states what is about to be deleted, so the confirmation names the
+  // document rather than asking about "this item".
+  const [confirming, setConfirming] = useState(null);
   const input = useRef(null);
 
   const handle = useCallback(
@@ -63,8 +68,10 @@ export function UploadPanel({ documents, onUpload, busy, lastResult }) {
       >
         <h3>{busy ? "Extracting…" : "Drop a project document here"}</h3>
         <p>
-          PDF, Word or text, up to 25 MB. Scanned documents without a text layer
-          are refused rather than extracted as empty — they need OCR first.
+          PDF, Word, Excel, CSV, or a photo of a form — up to 25 MB. Images are
+          read directly, so a photographed or scanned form is fine. A PDF with
+          no text layer is refused rather than extracted as empty; upload its
+          pages as images instead.
         </p>
         <button
           className="btn"
@@ -76,7 +83,7 @@ export function UploadPanel({ documents, onUpload, busy, lastResult }) {
         <input
           ref={input}
           type="file"
-          accept=".pdf,.docx,.doc,.txt,.md"
+          accept=".pdf,.docx,.doc,.txt,.md,.xlsx,.xlsm,.csv,.tsv,.png,.jpg,.jpeg,.webp,.heic,.tif,.tiff"
           style={{ display: "none" }}
           onChange={(e) => handle(e.target.files)}
         />
@@ -108,6 +115,54 @@ export function UploadPanel({ documents, onUpload, busy, lastResult }) {
                 >
                   {STATUS_LABEL[doc.status] ?? doc.status}
                 </span>
+                {confirming === doc.id ? (
+                  <>
+                    <span className="upload-row__confirm">
+                      Delete {doc.filename} and its review history?
+                    </span>
+                    <button
+                      className="btn btn--reject"
+                      style={{ padding: "5px 12px" }}
+                      disabled={busy}
+                      onClick={async () => {
+                        await onDelete(doc);
+                        setConfirming(null);
+                      }}
+                    >
+                      Delete
+                    </button>
+                    <button
+                      className="btn btn--edit"
+                      style={{ padding: "5px 12px" }}
+                      onClick={() => setConfirming(null)}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {onAssess && doc.status !== "MANUAL_ENTRY" && (
+                      <button
+                        className="btn btn--approve"
+                        style={{ padding: "5px 12px" }}
+                        disabled={busy || assessingId === doc.id}
+                        onClick={() => onAssess(doc)}
+                      >
+                        {assessingId === doc.id ? "Assessing…" : "Assess"}
+                      </button>
+                    )}
+                    {onDelete && (
+                      <button
+                        className="btn btn--reject"
+                        style={{ padding: "5px 12px" }}
+                        disabled={busy}
+                        onClick={() => setConfirming(doc.id)}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </>
+                )}
               </span>
             </div>
           ))}

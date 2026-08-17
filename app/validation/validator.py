@@ -109,17 +109,27 @@ def validate(data: ProjectExtraction) -> ValidationResult:
         if flag is None:
             continue
         result.flags.append(flag)
-        flagged_fields.add(flag.field_name)
-        source = getattr(data, flag.field_name, None)
-        result.review_items.append(ReviewItem(
-            field_name=flag.field_name,
-            reason=flag.message,
-            severity=flag.severity,
-            observed=flag.observed,
-            source_text=getattr(source, "source_text", "") if source else "",
-            source_page=getattr(source, "source_page", None) if source else None,
-            rule_id=flag.rule_id,
-        ))
+
+        # Queue every field the finding implicates, not only the one the rule
+        # is registered under. A capacity/generation mismatch is reported
+        # against generation, but the error is as likely to be in capacity —
+        # and a reviewer cannot correct a field that never reaches the queue.
+        for index, name in enumerate((flag.field_name, *flag.related)):
+            if name in flagged_fields or not hasattr(data, name):
+                continue
+            flagged_fields.add(name)
+            source = getattr(data, name, None)
+            result.review_items.append(ReviewItem(
+                field_name=name,
+                reason=(flag.message if index == 0 else
+                        f"Involved in the same finding as {flag.field_name}. "
+                        f"{flag.message}"),
+                severity=flag.severity,
+                observed=flag.observed,
+                source_text=getattr(source, "source_text", "") if source else "",
+                source_page=getattr(source, "source_page", None) if source else None,
+                rule_id=flag.rule_id,
+            ))
 
     # Low-confidence fields the rules did not already catch. A field can be
     # perfectly plausible and still have been read uncertainly.

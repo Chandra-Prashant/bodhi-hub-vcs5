@@ -62,6 +62,10 @@ export const api = {
   regulatoryStatus: () => request("/assessment/regulatory-status"),
   documents: () => request("/documents"),
   reviewQueue: () => request("/documents/queue"),
+  deleteDocument: (documentId) =>
+    request(`/documents/${documentId}`, { method: "DELETE", raw: true }),
+  assessDocument: (documentId) =>
+    request(`/documents/${documentId}/assess`, { method: "POST" }),
   resolveReview: (itemId, state, correctedValue, note) =>
     request(`/documents/review/${itemId}`, {
       method: "POST",

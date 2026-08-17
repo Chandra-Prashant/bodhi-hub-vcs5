@@ -86,14 +86,16 @@ def _load_docx(path: Path) -> DocumentContent:
     return DocumentContent(text="\n".join(parts), pages=1, kind="text")
 
 
-def _load_sheet(path: Path) -> DocumentContent:
+def _load_sheet(path: Path, suffix: str | None = None) -> DocumentContent:
     """Flatten a spreadsheet to labelled rows.
 
     Cell *values* are read, never formulas. A formula string tells the
     extractor nothing, and its computed result is somebody else's arithmetic —
     the same reason extraction refuses derived figures generally.
     """
-    suffix = path.suffix.lower()
+    # The resolved suffix, which may have come from content sniffing rather
+    # than the filename.
+    suffix = (suffix or path.suffix).lower()
     rows: list[str] = []
 
     if suffix in {".csv", ".tsv"}:
@@ -122,7 +124,7 @@ def _load_sheet(path: Path) -> DocumentContent:
     return DocumentContent(text="\n".join(rows), pages=1, kind="sheet")
 
 
-def _load_image(path: Path) -> DocumentContent:
+def _load_image(path: Path, suffix: str | None = None) -> DocumentContent:
     data = path.read_bytes()
     if not data:
         raise UnsupportedDocument(f"{path.name} is empty.")
@@ -132,18 +134,69 @@ def _load_image(path: Path) -> DocumentContent:
             f"images is {MAX_IMAGE_BYTES // 1_048_576} MB. Reduce the "
             f"resolution — a legible page scan is well under that.")
 
+    resolved = (suffix or path.suffix).lstrip(".").lower()
     media_type, _ = mimetypes.guess_type(path.name)
     if not media_type or not media_type.startswith("image/"):
-        media_type = f"image/{path.suffix.lstrip('.').lower()}"
+        # A sniffed file may be named anything at all, so the resolved suffix
+        # decides — guessing from the name would yield "image/0".
+        media_type = f"image/{'jpeg' if resolved == 'jpg' else resolved}"
     return DocumentContent(image=data, media_type=media_type, pages=1,
                            kind="image")
 
 
+# Leading bytes that identify a format regardless of what the file is called.
+_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"%PDF", ".pdf"),
+    (b"\x89PNG\r\n\x1a\n", ".png"),
+    (b"\xff\xd8\xff", ".jpg"),
+    (b"II*\x00", ".tif"),
+    (b"MM\x00*", ".tif"),
+)
+
+
+def sniff_suffix(path: Path) -> str:
+    """Identify a file by its contents when the name does not.
+
+    Verra distributes several documents named "VCS Standard, v5.0" with no
+    extension at all — Path.suffix reads ".0" and the file is refused despite
+    being an ordinary PDF. Uploaded files arrive named however someone saved
+    them, so dispatching on the name alone rejects valid documents.
+    """
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(8)
+    except OSError:
+        return ""
+
+    for magic, suffix in _MAGIC:
+        if head.startswith(magic):
+            return suffix
+
+    # OOXML and legacy Office files are both ZIP or OLE containers; look inside
+    # to tell a Word document from a spreadsheet.
+    if head.startswith(b"PK\x03\x04"):
+        try:
+            import zipfile
+
+            names = zipfile.ZipFile(path).namelist()
+        except Exception:  # noqa: BLE001
+            return ""
+        if any(n.startswith("word/") for n in names):
+            return ".docx"
+        if any(n.startswith("xl/") for n in names):
+            return ".xlsx"
+    return ""
+
+
 def load_document(path: Path) -> DocumentContent:
     suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_SUFFIXES:
+        sniffed = sniff_suffix(path)
+        if sniffed:
+            suffix = sniffed
 
     if suffix == ".pdf":
-        return _load_pdf(path)
+        return _load_pdf(path)  # noqa: F841 — suffix may have been sniffed
     if suffix in {".docx", ".doc"}:
         return _load_docx(path)
     if suffix in {".txt", ".md"}:
@@ -152,9 +205,9 @@ def load_document(path: Path) -> DocumentContent:
             raise UnsupportedDocument(f"{path.name} is empty.")
         return DocumentContent(text=text, pages=1, kind="text")
     if suffix in SHEET_SUFFIXES:
-        return _load_sheet(path)
+        return _load_sheet(path, suffix)
     if suffix in IMAGE_SUFFIXES:
-        return _load_image(path)
+        return _load_image(path, suffix)
 
     raise UnsupportedDocument(
         f"{path.suffix or 'This file type'} is not supported. Accepted: "

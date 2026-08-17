@@ -408,3 +408,123 @@ def test_an_image_is_not_indexed_into_the_style_corpus(tmp_path):
     path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200)
     with pytest.raises(UnsupportedDocument, match="style corpus needs text"):
         chunk_file(path)
+
+
+# --- files whose name does not identify them ------------------------------
+
+def test_a_pdf_with_no_extension_is_still_read(tmp_path):
+    """Verra ships documents named "VCS Standard, v5.0" — Path.suffix reads
+    ".0" and the file was refused despite being an ordinary PDF."""
+    from pypdf import PdfWriter
+
+    from app.extraction.documents import sniff_suffix
+
+    source = tmp_path / "made.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    with source.open("wb") as fh:
+        writer.write(fh)
+
+    odd = tmp_path / "VCS Standard, v5.0"
+    odd.write_bytes(source.read_bytes())
+    assert sniff_suffix(odd) == ".pdf"
+
+
+def test_an_image_named_oddly_gets_a_valid_media_type(tmp_path):
+    """Deriving it from the filename would produce "image/0", which no model
+    will accept."""
+    path = tmp_path / "scan, v5.0"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 200)
+    content = load_document(path)
+    assert content.is_image
+    assert content.media_type == "image/png"
+
+
+def test_a_docx_is_told_apart_from_an_xlsx_by_its_contents(tmp_path):
+    import docx as docx_lib
+    from openpyxl import Workbook
+
+    from app.extraction.documents import sniff_suffix
+
+    d = tmp_path / "doc"
+    docx_lib.Document().save(str(d) + ".docx")
+    (tmp_path / "renamed_doc").write_bytes((tmp_path / "doc.docx").read_bytes())
+    assert sniff_suffix(tmp_path / "renamed_doc") == ".docx"
+
+    Workbook().save(str(tmp_path / "book.xlsx"))
+    (tmp_path / "renamed_book").write_bytes((tmp_path / "book.xlsx").read_bytes())
+    assert sniff_suffix(tmp_path / "renamed_book") == ".xlsx"
+
+
+def test_sniffing_does_not_rescue_a_genuinely_unsupported_file(tmp_path):
+    path = tmp_path / "archive.bin"
+    path.write_bytes(b"\x00\x01\x02\x03not a document")
+    with pytest.raises(UnsupportedDocument, match="not supported"):
+        load_document(path)
+
+
+# --- the prompt must carry the schema -------------------------------------
+
+def test_every_schema_field_is_named_in_the_prompt():
+    """The prompt once said "return JSON matching the given schema" without
+    supplying one. The model invented its own key names, parse_response kept
+    only exact matches, and eleven of thirteen values were dropped in silence —
+    while every test passed, because the test double returned correct names."""
+    from app.extraction.schema import ProjectExtraction
+
+    for name in ProjectExtraction.model_fields:
+        assert f'"{name}"' in SYSTEM_PROMPT, f"{name} missing from the prompt"
+
+
+def test_required_fields_are_marked_as_such_in_the_prompt():
+    from app.extraction.schema import REQUIRED_FIELDS
+
+    for name in REQUIRED_FIELDS:
+        line = next(l for l in SYSTEM_PROMPT.splitlines() if f'"{name}"' in l)
+        assert "(REQUIRED)" in line
+
+
+def test_every_field_carries_guidance_for_the_model():
+    from app.extraction.schema import ProjectExtraction
+
+    for name, field in ProjectExtraction.model_fields.items():
+        assert field.description, f"{name} has no description"
+        assert len(field.description) > 20
+
+
+def test_the_prompt_forbids_inventing_key_names():
+    lowered = SYSTEM_PROMPT.lower()
+    assert "exactly the field names" in lowered
+    assert "invented name loses the value" in lowered
+
+
+def test_the_specification_is_generated_not_hand_written():
+    """So the prompt cannot drift from the schema again."""
+    from app.extraction.schema import field_specification
+
+    spec = field_specification()
+    assert spec.count("\n") + 1 == len(ProjectExtraction.model_fields)
+
+
+# --- unrecognised keys are reported ---------------------------------------
+
+def test_unknown_keys_are_identified():
+    from app.extraction.pipeline import unknown_keys
+
+    payload = json.dumps({"project_name": _field("X"),
+                          "projectName": _field("X"),
+                          "capacity_MW": _field("50")})
+    assert unknown_keys(payload) == ["capacity_MW", "projectName"]
+
+
+def test_a_wrongly_named_response_says_so_in_the_error(doc):
+    """The symptom otherwise looks like a document that had little in it."""
+    response = json.dumps({
+        "projectName": _field("Aligarh Solar One"),
+        "companyName": _field("Bodhi Hub"),
+        "capacityMW": _field("50"),
+    })
+    result = extract(doc, FakeExtractor(response=response))
+    assert result.status is ExtractionStatus.FAILED
+    assert "not following the field list" in result.error
+    assert "prompt problem" in result.error

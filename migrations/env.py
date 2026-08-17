@@ -53,12 +53,14 @@ def include_object(object, name, type_, reflected, compare_to) -> bool:
         return False
     return True
 
+
 def render_item(type_, obj, autogen_context):
     """Emit the pgvector import alongside a Vector column.
 
-    Alembic renders the fully-qualified type name but does not add the import
-    for third-party column types, so a generated migration references
-    pgvector.sqlalchemy and then fails with NameError at upgrade time.
+    Alembic renders the fully-qualified type name for a third-party column type
+    but does not add its import, so a generated migration references
+    pgvector.sqlalchemy and then fails with NameError at upgrade time — after
+    the revision file has already been written.
     """
     if type_ == "type" and obj.__class__.__module__.startswith("pgvector"):
         autogen_context.imports.add("import pgvector.sqlalchemy")
@@ -73,8 +75,8 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         compare_type=True,
         include_object=include_object,
-        render_item=render_item,
         include_schemas=False,
+        render_item=render_item,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -91,8 +93,8 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             include_object=include_object,
-            render_item=render_item,
             include_schemas=False,
+            render_item=render_item,
         )
         with context.begin_transaction():
             context.run_migrations()

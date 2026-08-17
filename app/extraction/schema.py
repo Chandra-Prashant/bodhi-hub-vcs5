@@ -90,23 +90,61 @@ class ProjectExtraction(BaseModel):
 
     model_config = {"extra": "forbid"}
 
-    project_name: ExtractedField[str] = Field(default_factory=ExtractedField)
-    proponent: ExtractedField[str] = Field(default_factory=ExtractedField)
-    country_iso2: ExtractedField[str] = Field(default_factory=ExtractedField)
-    technology: ExtractedField[str] = Field(default_factory=ExtractedField)
-    installed_capacity_mw: ExtractedField[str] = Field(default_factory=ExtractedField)
+    project_name: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="The name of the project itself, not the document title "
+                    "and not the proponent's company name.")
+    proponent: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="The organisation developing or owning the project.")
+    country_iso2: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="Host country as a two-letter ISO code, e.g. IN for India. "
+                    "If the document names the country in words, give the code "
+                    "and say so in note.")
+    technology: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="Generation technology as the document describes it, e.g. "
+                    "'terrestrial solar photovoltaic', 'onshore wind'.")
+    installed_capacity_mw: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="Installed capacity as a number only, no unit. Record the "
+                    "unit the document used in note; do not convert.")
     expected_annual_generation_mwh: ExtractedField[str] = Field(
-        default_factory=ExtractedField)
+        default_factory=ExtractedField,
+        description="Expected net annual electricity export as a number only, "
+                    "no unit. Do not convert.")
     initial_crediting_period_start: ExtractedField[date] = Field(
-        default_factory=ExtractedField)
-    location_description: ExtractedField[str] = Field(default_factory=ExtractedField)
+        default_factory=ExtractedField,
+        description="Start date of the initial crediting period, as written "
+                    "(e.g. 01-MAR-2026). Not the construction or commissioning "
+                    "date unless the document says they are the same.")
+    location_description: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="Where the project is, in the document's own words.")
 
     # Financial model inputs — stated in a project's own financial documents.
-    capex: ExtractedField[str] = Field(default_factory=ExtractedField)
-    annual_opex: ExtractedField[str] = Field(default_factory=ExtractedField)
-    tariff_per_mwh: ExtractedField[str] = Field(default_factory=ExtractedField)
-    project_lifetime_years: ExtractedField[str] = Field(default_factory=ExtractedField)
-    benchmark_irr: ExtractedField[str] = Field(default_factory=ExtractedField)
+    capex: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="Total capital cost as a number only. Record the currency "
+                    "and scale (lakh, crore, million) in note; do not convert.")
+    annual_opex: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="Annual operating expenditure as a number only, same "
+                    "treatment as capital cost.")
+    tariff_per_mwh: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="Power purchase tariff per MWh as a number only.")
+    project_lifetime_years: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="Operating life in years as a number only. Not the "
+                    "crediting period.")
+    benchmark_irr: ExtractedField[str] = Field(
+        default_factory=ExtractedField,
+        description="The required or benchmark rate of return the project must "
+                    "clear — often a regulator-approved return on equity. "
+                    "Number only; say in note whether it was a percentage. "
+                    "This is a required hurdle rate, NOT a computed IRR.")
 
     def fields_needing_review(self) -> list[str]:
         """Fields that were found but are not certain.
@@ -194,3 +232,22 @@ class ExtractionResult(BaseModel):
         if self.status is ExtractionStatus.FAILED:
             return list(ProjectExtraction.model_fields)
         return self.data.fields_needing_review() + self.data.missing_required()
+
+
+def field_specification() -> str:
+    """The exact field list, rendered for the extraction prompt.
+
+    Generated from the schema rather than written out by hand. The prompt used
+    to say "return JSON matching the given schema" without ever supplying one,
+    so the model invented its own field names and `parse_response` — which
+    keeps only exact matches — discarded most of what it found. Eleven of
+    thirteen values were lost silently, and every test passed because the test
+    double returned correctly-named keys.
+
+    Generating this means the prompt cannot drift from the schema again.
+    """
+    lines = []
+    for name, field in ProjectExtraction.model_fields.items():
+        required = " (REQUIRED)" if name in REQUIRED_FIELDS else ""
+        lines.append(f'  "{name}"{required} — {field.description or ""}')
+    return "\n".join(lines)

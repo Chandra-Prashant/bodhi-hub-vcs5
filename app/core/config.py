@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # now, behind services.ingestion.storage_root so swapping it is one change.
     UPLOAD_DIR: str = "uploads"
 
+    # "local" or "s3". Local is the default so a developer needs no cloud
+    # credentials; production should use s3 per Architecture.md, because the
+    # application volume is not replicated and does not survive a container
+    # being replaced.
+    STORAGE_BACKEND: str = "local"
+    S3_BUCKET: str = ""
+    S3_ENDPOINT_URL: str = ""   # set for MinIO, R2, Backblaze; blank for AWS
+    S3_REGION: str = ""
+
     # --- database ---
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str
@@ -48,7 +57,12 @@ class Settings(BaseSettings):
     # --- LLM ---
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-flash-latest"
-    EMBEDDING_MODEL: str = "models/text-embedding-004"
+    EMBEDDING_MODEL: str = "gemini-embedding-001"
+    # gemini-embedding-001 returns 3072 by default and supports truncation.
+    # 768 is requested instead: report_chunks.embedding is sized to this, and
+    # for a corpus of a few hundred documents the larger vector costs four
+    # times the storage and index time for no retrieval quality anyone would
+    # notice. Changing this requires a migration to resize the column.
     EMBEDDING_DIM: int = 768
 
     @field_validator("SECRET_KEY")

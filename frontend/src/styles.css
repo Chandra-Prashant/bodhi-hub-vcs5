@@ -680,3 +680,10 @@ button { font: inherit; cursor: pointer; }
 .upload-row__name { font-weight: 500; }
 .upload-row__meta { margin-left: auto; display: flex; gap: 12px;
   align-items: center; }
+
+
+/* A header with no project loaded. Stating the absence plainly beats an empty
+   space that reads as a rendering fault. */
+.topbar__untitled { color: var(--inert); font-weight: 500; }
+
+.upload-row__confirm { font-size: 12px; color: var(--fail); }

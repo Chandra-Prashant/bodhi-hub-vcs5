@@ -199,3 +199,36 @@ def test_units_survive_so_the_sentence_still_reads(unit):
     redacted = redact_numbers(f"generated 87,600 {unit} last year")
     assert unit in redacted
     assert not contains_figure(redacted)
+
+
+# --- embedding dimensions -------------------------------------------------
+
+def test_normalise_gives_unit_length():
+    """gemini-embedding-001 normalises its full 3072-dim output but not a
+    truncated one, so a 768-dim result arrives unnormalised."""
+    from app.rag.index import normalise
+
+    v = normalise([3.0, 4.0])
+    assert abs(sum(c * c for c in v) ** 0.5 - 1.0) < 1e-9
+
+
+def test_normalise_survives_a_zero_vector():
+    from app.rag.index import normalise
+
+    assert normalise([0.0, 0.0]) == [0.0, 0.0]
+
+
+def test_normalise_preserves_direction():
+    from app.rag.index import normalise
+
+    a, b = normalise([1.0, 2.0, 3.0]), normalise([2.0, 4.0, 6.0])
+    assert all(abs(x - y) < 1e-12 for x, y in zip(a, b))
+
+
+def test_the_column_width_matches_the_configured_dimension():
+    """A mismatch fails at insert with a far less obvious error."""
+    from app.core.config import settings
+    from app.models.rag import ReportChunk
+
+    column = ReportChunk.__table__.c.embedding
+    assert column.type.dim == settings.EMBEDDING_DIM

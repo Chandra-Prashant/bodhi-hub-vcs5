@@ -21,6 +21,10 @@ from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+import contextlib
+import shutil
+import tempfile
+
 from app.core.config import settings
 from app.extraction.documents import SUPPORTED_SUFFIXES
 from app.extraction.pipeline import Extractor, extract
@@ -34,6 +38,7 @@ from app.models.ingestion import (
 )
 from app.models.user import User
 from app.services import audit
+from app.services.storage import Storage, get_storage
 from app.validation.validator import validate_extraction
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -76,16 +81,29 @@ def check_upload(filename: str, content: bytes) -> None:
 
 
 def storage_root() -> Path:
-    """Where uploads land.
-
-    Architecture.md specifies S3-compatible object storage. This is local disk
-    behind a single function so swapping it is one change, not a search across
-    the codebase. Until that swap, uploads live on the application volume and
-    are not replicated.
-    """
+    """Deprecated. Kept so existing callers keep working; new code should use
+    app.services.storage.get_storage()."""
     root = Path(getattr(settings, "UPLOAD_DIR", "uploads"))
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+@contextlib.contextmanager
+def _local_copy(storage: Storage, locator: str, filename: str):
+    """Materialise a stored object to a path the extractor can read.
+
+    The suffix is preserved because the loader dispatches on it — a PDF
+    written to a temp file without ".pdf" would be refused as unsupported.
+    """
+    suffix = Path(filename).suffix or Path(locator).suffix
+    handle = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        handle.write(storage.get(locator))
+        handle.close()
+        yield Path(handle.name)
+    finally:
+        with contextlib.suppress(OSError):
+            Path(handle.name).unlink()
 
 
 @dataclass
@@ -124,16 +142,17 @@ def ingest(
             f"Re-running extraction on it is a separate action.")
 
     stored_name = safe_filename(filename)
-    directory = storage_root() / str(uuid.uuid4())
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / stored_name
-    path.write_bytes(content)
+    storage = get_storage()
+    # The key is generated, never derived from the uploaded name — a name from
+    # a browser can contain path separators.
+    locator = storage.put(storage.new_key(user.organization, stored_name),
+                          content)
 
     document = Document(
         filename=stored_name,
         content_hash=digest,
         byte_size=len(content),
-        storage_path=str(path),
+        storage_path=locator,
         organization=user.organization,
         uploaded_by=user.id,
         status=DocumentStatus.UPLOADED,
@@ -151,7 +170,10 @@ def ingest(
         detail={"filename": stored_name, "bytes": len(content)},
     )
 
-    result = extract(path, extractor)
+    # Extraction reads from a file, so an object-store backend is materialised
+    # to a temporary path for the duration of the call and removed afterwards.
+    with _local_copy(storage, locator, stored_name) as path:
+        result = extract(path, extractor)
     validation = validate_extraction(result)
 
     extraction = Extraction(
@@ -235,6 +257,16 @@ def resolve_review_item(
     if state is ReviewState.EDITED and not (corrected_value or "").strip():
         raise ValueError("An edit needs a corrected value.")
 
+    # An extraction that failed outright is not a field with a doubtful value;
+    # there is nothing to approve. Allowing it marked documents APPROVED whose
+    # extraction had failed, which is how a document with two of thirteen
+    # fields reached the assessment step looking complete.
+    if item.rule_id == "extraction.failed" and state is not ReviewState.REJECTED:
+        raise ValueError(
+            "This document could not be read, so there is no value to approve. "
+            "Re-upload it in a readable format, or enter the project by hand "
+            "under Project details. Rejecting it marks it as handled.")
+
     item.state = state
     item.corrected_value = corrected_value if state is ReviewState.EDITED else None
     item.reviewer_note = note
@@ -263,7 +295,12 @@ def resolve_review_item(
         extraction = db.get(Extraction, item.extraction_id)
         if extraction is not None:
             document = db.get(Document, extraction.document_id)
-            if document is not None:
+            # Only a document whose extraction succeeded can become APPROVED.
+            # Resolving every item on a failed extraction still leaves a
+            # document nobody can calculate from, and calling that approved
+            # makes the status a claim the data does not support.
+            failed = extraction.status == ExtractionStatus.FAILED.value
+            if document is not None and not failed:
                 document.status = DocumentStatus.APPROVED
                 audit.record(
                     db, action="review.document_cleared",

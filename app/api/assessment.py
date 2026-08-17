@@ -85,16 +85,24 @@ def _run(payload: AssessmentRequest):
         )
         findings.extend(er.findings)
 
-        if payload.financials:
-            add = assess_additionality(
-                FinancialInputs(**payload.financials.model_dump(),
-                                annual_credits_tco2e=er.emission_reductions_tco2e),
-                n_all=payload.similar_projects_all,
-                n_diff=payload.similar_projects_distinct,
-                project_capacity_mw=intake.installed_capacity_mw,
-                regulatory_surplus=payload.regulatory_surplus,
-            )
-            findings.extend(add.findings)
+    # Additionality is deliberately OUTSIDE the grid-data branch. VT0008
+    # s5.4.2(2)(a) — the condition that decides additionality — tests the
+    # return WITHOUT credit revenue, and needs no credit volume. Regulatory
+    # surplus and common practice need none either. Requiring dispatch data
+    # here withheld a result the engine could already produce, and reported it
+    # as "no financial model supplied", which was not true.
+    if payload.financials:
+        add = assess_additionality(
+            FinancialInputs(
+                **payload.financials.model_dump(),
+                annual_credits_tco2e=(er.emission_reductions_tco2e
+                                      if er is not None else None)),
+            n_all=payload.similar_projects_all,
+            n_diff=payload.similar_projects_distinct,
+            project_capacity_mw=intake.installed_capacity_mw,
+            regulatory_surplus=payload.regulatory_surplus,
+        )
+        findings.extend(add.findings)
 
     monitoring = build_monitoring_parameters(
         intake.technology, has_bess=payload.has_bess)

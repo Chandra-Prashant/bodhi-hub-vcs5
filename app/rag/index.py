@@ -23,6 +23,21 @@ from app.rag.chunking import Chunk, chunk_file
 from app.rag.redaction import contains_figure, redact_numbers
 
 
+def normalise(vector: list[float]) -> list[float]:
+    """Scale a vector to unit length.
+
+    gemini-embedding-001 normalises its full 3072-dimension output but not a
+    truncated one, so a 768-dimension result comes back unnormalised. Cosine
+    distance divides by magnitude and would be unaffected, but storing vectors
+    of wildly differing length makes every other distance metric meaningless
+    and would quietly break a future switch to inner product or L2.
+    """
+    magnitude = sum(component * component for component in vector) ** 0.5
+    if magnitude == 0:
+        return list(vector)
+    return [component / magnitude for component in vector]
+
+
 class Embedder(ABC):
     """The model boundary for embeddings, isolated so indexing and retrieval
     are testable without a network call."""
@@ -44,15 +59,33 @@ class GeminiEmbedder(Embedder):
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         from google import genai
+        from google.genai import types
+
+        from app.services.retry import with_retry
 
         client = genai.Client(api_key=self.api_key)
+        config = types.EmbedContentConfig(
+            output_dimensionality=self.dimension,
+            task_type="RETRIEVAL_DOCUMENT",
+        )
+
         vectors: list[list[float]] = []
-        # Batched to keep a single failure from costing the whole corpus.
+        # Batched to keep a single failure from costing the whole corpus, and
+        # retried because indexing 300 reports will meet a rate limit.
         for start in range(0, len(texts), 32):
             batch = texts[start:start + 32]
-            response = client.models.embed_content(model=self.model,
-                                                   contents=batch)
-            vectors.extend(e.values for e in response.embeddings)
+            response = with_retry(lambda b=batch: client.models.embed_content(
+                model=self.model, contents=b, config=config))
+            vectors.extend(normalise(e.values) for e in response.embeddings)
+
+        for vector in vectors:
+            if len(vector) != self.dimension:
+                raise ValueError(
+                    f"{self.model} returned {len(vector)} dimensions, expected "
+                    f"{self.dimension}. The report_chunks.embedding column is "
+                    f"sized to EMBEDDING_DIM, so a mismatch fails at insert "
+                    f"with a far less obvious error than this one."
+                )
         return vectors
 
 

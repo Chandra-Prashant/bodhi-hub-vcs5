@@ -205,9 +205,17 @@ def build_assessment_payload(handover: Handover) -> dict:
     values = handover.values
     missing = [name for name in REQUIRED if not values.get(name)]
     if missing:
+        # Where nothing is queued, telling the reviewer to fix it "during
+        # review" sends them to an empty screen. The values were never
+        # extracted, so the route forward is re-upload or manual entry.
+        route = ("Resolve them in the review queue."
+                 if handover.notes or handover.corrections_applied
+                 else "These were not found in the document at all, so there "
+                      "is nothing queued to correct. Re-upload a document that "
+                      "states them, or enter the project by hand under Project "
+                      "details.")
         raise HandoverRefused(
-            f"Required field(s) still missing: {', '.join(missing)}. "
-            f"Enter them during review.")
+            f"Required field(s) still missing: {', '.join(missing)}. {route}")
 
     payload: dict = {
         "name": str(values["project_name"]),

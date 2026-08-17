@@ -31,6 +31,7 @@ from app.extraction.schema import (
     ExtractionStatus,
     ProjectExtraction,
     band,
+    field_specification,
 )
 
 # Checked at import: a schema change that crosses the calculated-field boundary
@@ -38,10 +39,20 @@ from app.extraction.schema import (
 assert_extraction_safe(ProjectExtraction.model_fields)
 
 
-SYSTEM_PROMPT = """\
+_PROMPT_TEMPLATE = """\
 You extract stated values from project documents. You do not calculate.
 
-Return JSON matching the given schema exactly. For each field return:
+Return a single JSON object whose keys are EXACTLY the field names listed
+below. Use no other key names — a key we do not recognise is discarded, so an
+invented name loses the value you found.
+
+FIELDS TO EXTRACT:
+{fields}
+
+Include every field in your response. Where the document does not state a
+value, return it with "value": null rather than omitting the key.
+
+For each field return:
   value        the value exactly as the document states it, or null
   score        0.0-1.0, how certain you are this is the right value
   source_page  the page number you found it on, or null
@@ -64,6 +75,8 @@ Rules, without exception:
 - Lower your score when the value is ambiguous, appears more than once with
   different values, or you inferred it from context rather than reading it.
 """
+
+SYSTEM_PROMPT = _PROMPT_TEMPLATE.format(fields=field_specification())
 
 
 IMAGE_INSTRUCTION = """\
@@ -109,6 +122,8 @@ class GeminiExtractor(Extractor):
         from google import genai
         from google.genai import types
 
+        from app.services.retry import with_retry
+
         client = genai.Client(api_key=self.api_key)
 
         if image is not None:
@@ -122,11 +137,13 @@ class GeminiExtractor(Extractor):
             parts = [types.Part.from_text(
                 text=f"{system}\n\n--- DOCUMENT ---\n{document_text}")]
 
-        response = client.models.generate_content(
+        # A 503 or 429 from an overloaded model must not mark a document for
+        # manual entry — see app/services/retry.py.
+        response = with_retry(lambda: client.models.generate_content(
             model=self.model,
             contents=parts,
             config={"response_mime_type": "application/json"},
-        )
+        ))
         return response.text
 
 
@@ -147,6 +164,27 @@ def _coerce_date(raw: object) -> date | None:
             except ValueError:
                 continue
     return None
+
+
+def unknown_keys(payload: str) -> list[str]:
+    """Keys the model returned that the schema does not define.
+
+    Surfaced rather than ignored: a response full of unrecognised names means
+    the model is not following the field list, and the symptom otherwise looks
+    like a document that simply had little in it.
+    """
+    try:
+        text = payload.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        raw = json.loads(text)
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(raw, dict):
+        return []
+    return sorted(set(raw) - set(ProjectExtraction.model_fields))
 
 
 def parse_response(payload: str) -> ProjectExtraction:
@@ -241,13 +279,19 @@ def extract(
 
     found = data.fields_found()
     if len(found) < minimum_fields:
+        stray = unknown_keys(response)
+        detail = (
+            f" The model returned {len(stray)} key(s) the schema does not "
+            f"define ({', '.join(stray[:6])}), so it is not following the "
+            f"field list — this is a prompt problem, not a document problem."
+            if stray else
+            " This document probably is not a project description, or needs "
+            "manual entry.")
         return ExtractionResult(
             document_name=path.name, status=ExtractionStatus.FAILED,
             data=data, pages_read=pages, model=extractor.name,
-            error=(
-                f"Only {len(found)} field(s) extracted, below the minimum of "
-                f"{minimum_fields}. This document probably is not a project "
-                f"description, or needs manual entry."))
+            error=(f"Only {len(found)} field(s) extracted, below the minimum "
+                   f"of {minimum_fields}.{detail}"))
 
     clean = not data.fields_needing_review() and not data.missing_required()
     status = ExtractionStatus.EXTRACTED if clean else ExtractionStatus.PARTIAL

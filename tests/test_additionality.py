@@ -277,3 +277,46 @@ def test_decimal_and_float_inputs_agree():
     as_string = benchmark_analysis(_inputs(benchmark_irr="0.14"))
     assert as_float.benchmark_irr == as_string.benchmark_irr
     assert as_float.passes_step3 == as_string.passes_step3
+
+
+# --- additionality without a known credit volume --------------------------
+
+def test_condition_a_is_testable_without_credit_volume():
+    """VT0008 s5.4.2(2)(a) tests the return WITHOUT credit revenue, so it does
+    not depend on grid dispatch data. Withholding it until dispatch data
+    arrives hides a result the engine can already produce."""
+    result = benchmark_analysis(_inputs(annual_credits_tco2e=None))
+    assert result.irr_without_credits is not None
+    assert result.passes_step3 is not None
+
+
+def test_the_with_credits_leg_is_omitted_rather_than_guessed():
+    result = benchmark_analysis(_inputs(annual_credits_tco2e=None))
+    assert result.irr_with_credits is None
+
+
+def test_unknown_credits_are_not_treated_as_zero():
+    """Zero credits would report irr_with_credits equal to irr_without and
+    evaluate the CCP conditions against a meaningless number."""
+    unknown = benchmark_analysis(_inputs(annual_credits_tco2e=None))
+    zero = benchmark_analysis(_inputs(annual_credits_tco2e=0))
+    assert unknown.irr_with_credits is None
+    assert zero.irr_with_credits is not None
+
+
+def test_the_omission_is_reported():
+    result = benchmark_analysis(_inputs(annual_credits_tco2e=None))
+    assert any(f.check == "vt0008.credits_unknown" for f in result.findings)
+
+
+def test_ccp_is_not_claimed_without_credit_volume():
+    result = benchmark_analysis(_inputs(annual_credits_tco2e=None))
+    assert not result.meets_ccp_conditions
+
+
+def test_an_out_of_range_return_is_reported_not_silently_dropped():
+    """Mixed units make revenue thousands of times the investment; the solver
+    cannot bracket the rate and previously returned None with no explanation."""
+    result = benchmark_analysis(_inputs(capex=40_000.0, tariff_per_mwh=3_000.0))
+    assert result.irr_without_credits is None
+    assert any(f.check == "vt0008.irr_out_of_range" for f in result.findings)

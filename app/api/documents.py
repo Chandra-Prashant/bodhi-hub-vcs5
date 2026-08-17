@@ -10,7 +10,16 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
@@ -33,6 +42,7 @@ from app.schemas.ingestion import (
     ReviewItemOut,
     UploadResponse,
 )
+from app.services import audit
 from app.services.handover import (
     HandoverRefused,
     build_assessment_payload,
@@ -41,6 +51,7 @@ from app.services.handover import (
 )
 from app.services.ingestion import (
     UploadRejected,
+    check_upload,
     ingest,
     resolve_review_item,
 )
@@ -75,9 +86,20 @@ async def upload(
 ) -> UploadResponse:
     """Upload a document, extract it, validate it, and queue what needs review."""
     content = await file.read()
+    filename = file.filename or "document"
+
+    # Check the upload BEFORE resolving the model. A file we would refuse
+    # anyway should not depend on a model being configured — otherwise an
+    # unsupported type reports "no extraction model configured", which sends
+    # whoever is debugging it to the wrong place entirely.
     try:
-        outcome = ingest(db, user, file.filename or "document", content,
-                         _extractor(), request)
+        check_upload(filename, content)
+    except UploadRejected as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=str(exc))
+
+    try:
+        outcome = ingest(db, user, filename, content, _extractor(), request)
     except UploadRejected as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=str(exc))
@@ -118,6 +140,56 @@ def review_queue(
         )
         .order_by(_SEVERITY_ORDER, ReviewItem.created_at)
         .limit(min(limit, 500))))
+
+
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_document(
+    document_id: uuid.UUID,
+    request: Request,
+    user: User = Depends(require_roles(Role.ADMIN, Role.AUDITOR)),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Remove a document, its extractions and its review items.
+
+    The audit log survives. Its rows record the resource id as a string rather
+    than a foreign key, so deleting a document leaves the record that it was
+    uploaded, extracted, reviewed and then removed — by whom and when. A
+    compliance system that can erase its own history is not one.
+
+    Stored object removal is best effort. An orphaned object costs storage; a
+    row pointing at a file that is gone breaks every later read, so the row
+    goes only once we have tried the object.
+    """
+    from app.services.storage import StorageError, get_storage
+
+    document = db.get(Document, document_id)
+    if document is None or document.organization != user.organization:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Document not found.")
+
+    object_removed = False
+    object_error = ""
+    try:
+        object_removed = get_storage().delete(document.storage_path)
+    except StorageError as exc:
+        object_error = str(exc)
+
+    filename = document.filename
+    db.delete(document)      # extractions and review items cascade
+
+    audit.record(
+        db, action="document.deleted", outcome=audit.SUCCESS,
+        actor_email=user.email, organization=user.organization,
+        user_id=user.id, resource_type="document", resource_id=str(document_id),
+        request=request,
+        detail={"filename": filename, "object_removed": object_removed},
+        note=object_error or None)
+    db.flush()
+    # Returned explicitly rather than annotating `-> None`: FastAPI reads the
+    # return annotation as the response model, and NoneType is a class, so a
+    # 204 route annotated that way trips its own "must not have a response
+    # body" assertion at import time.
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{document_id}/extraction", response_model=ExtractionOut)
@@ -185,7 +257,6 @@ def assess_document(
     """
     from app.api.assessment import _run
     from app.schemas.assessment import AssessmentRequest, AssessmentResponse
-    from app.services import audit
 
     extraction = None
     try:
@@ -217,6 +288,10 @@ def assess_document(
 
     return {
         "assessment": result.model_dump(mode="json"),
+        # The payload the assessment actually ran on, so the Project details
+        # form can show it. Without this a user sees a result with no visible
+        # inputs and no way to tell what the system read, corrected or dropped.
+        "project": payload,
         "corrections_applied": handover.corrections_applied,
         "notes": handover.notes,
     }

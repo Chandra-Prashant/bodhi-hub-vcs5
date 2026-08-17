@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api, downloadBlob, setToken } from "./api.js";
-import { sampleProject } from "./sample.js";
+import { emptyProject, isRunnable, sampleProject } from "./sample.js";
 import { DocumentPanel } from "./components/DocumentPanel.jsx";
 import { EsgEditor } from "./components/EsgEditor.jsx";
 import { ReviewQueue, UploadPanel } from "./components/ReviewPanels.jsx";
@@ -31,7 +31,7 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const [project, setProject] = useState(sampleProject);
+  const [project, setProject] = useState(emptyProject);
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [view, setView] = useState("register");
@@ -45,6 +45,58 @@ export default function App() {
   const [queue, setQueue] = useState([]);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [lastUpload, setLastUpload] = useState(null);
+  const [assessingId, setAssessingId] = useState(null);
+  const [handoverNotes, setHandoverNotes] = useState([]);
+
+  async function deleteDocument(doc) {
+    setUploadBusy(true);
+    setError("");
+    try {
+      await api.deleteDocument(doc.id);
+      // The removed document may be the one on screen. Clearing avoids showing
+      // an assessment whose source no longer exists.
+      if (lastUpload?.document?.id === doc.id) setLastUpload(null);
+      await refreshIngestion();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  async function assessDocument(doc) {
+    setAssessingId(doc.id);
+    setError("");
+    setHandoverNotes([]);
+    try {
+      const response = await api.assessDocument(doc.id);
+      setResult(response.assessment);
+      setHandoverNotes([
+        ...(response.corrections_applied?.length
+          ? [`Reviewer corrections applied to: ${response.corrections_applied.join(", ")}.`]
+          : []),
+        ...(response.notes ?? []),
+      ]);
+      // Show the values the assessment ran on. The handover already applied
+      // reviewer corrections and dropped rejected values, so this is what was
+      // actually used — not what the document said.
+      if (response.project) {
+        setProject({
+          ...emptyProject,
+          ...response.project,
+          financials: response.project.financials ?? null,
+        });
+      }
+      setView("register");
+    } catch (err) {
+      // A 409 means blocking review items are unresolved. That is a normal
+      // state with somewhere to go, not a failure to report and abandon.
+      setError(err.message);
+      if (/review item/i.test(err.message)) setView("queue");
+    } finally {
+      setAssessingId(null);
+    }
+  }
 
   async function refreshIngestion() {
     try {
@@ -98,9 +150,22 @@ export default function App() {
     }
   }
 
+  function loadSample() {
+    setProject(sampleProject);
+    setResult(null);
+    setDocStatus(null);
+  }
+
+  function clearProject() {
+    setProject(emptyProject);
+    setResult(null);
+    setDocStatus(null);
+  }
+
   function signOut() {
     setToken(null);
     setUser(null);
+    setProject(emptyProject);
     setResult(null);
     setRegulatory(null);
     setDocStatus(null);
@@ -164,10 +229,12 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
+    // Reference data only. No assessment runs on sign-in — the app opens with
+    // nothing loaded, so every figure on screen belongs to something the user
+    // put there.
     api.regulatoryStatus().then(setRegulatory).catch(() => setRegulatory(null));
     api.esgSchema().then(setEsgSchema).catch(() => setEsgSchema(null));
     refreshIngestion();
-    run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
@@ -230,12 +297,16 @@ export default function App() {
 
       <main className="main">
         <header className="topbar">
-          <h1>{result?.project_name ?? project.name}</h1>
+          <h1 className={project.name ? "" : "topbar__untitled"}>
+            {result?.project_name || project.name || "No project loaded"}
+          </h1>
           <div className="topbar__meta">
-            <span className="clause">
-              {project.technology.replace(/_/g, " ").toLowerCase()} ·{" "}
-              {project.installed_capacity_mw} MW · {project.country_iso2}
-            </span>
+            {project.name && (
+              <span className="clause">
+                {project.technology.replace(/_/g, " ").toLowerCase()} ·{" "}
+                {project.installed_capacity_mw} MW · {project.country_iso2}
+              </span>
+            )}
             {result && (
               <span className="clause">
                 template {result.classification.template_version} · crediting
@@ -257,6 +328,12 @@ export default function App() {
 
         <div className="canvas">
           {error && <div className="alert" style={{ marginBottom: 20 }}>{error}</div>}
+
+          {handoverNotes.length > 0 && view === "register" && (
+            <div className="esg__ok" style={{ marginBottom: 20 }}>
+              {handoverNotes.map((note, i) => <div key={i}>{note}</div>)}
+            </div>
+          )}
 
           {result && view !== "uploads" && view !== "queue" &&
             (view === "register" ? (
@@ -317,7 +394,10 @@ export default function App() {
               <UploadPanel
                 documents={documents}
                 onUpload={uploadDocument}
+                onAssess={assessDocument}
+                onDelete={deleteDocument}
                 busy={uploadBusy}
+                assessingId={assessingId}
                 lastResult={lastUpload}
               />
             </section>
@@ -388,16 +468,33 @@ export default function App() {
                 onExport={exportMatrix}
                 busy={busy}
                 hasResult={Boolean(result)}
+                runnable={isRunnable(project)}
+                onLoadSample={loadSample}
+                onClear={clearProject}
               />
             </section>
           )}
 
-          {!result && !busy && view !== "project" && (
-            <div className="empty">
-              <h3>No assessment yet</h3>
-              <p>Open Project details and run one.</p>
-            </div>
-          )}
+          {!result && !busy &&
+            ["register", "quantify", "additionality"].includes(view) && (
+              <div className="empty">
+                <h3>Nothing assessed yet</h3>
+                <p>
+                  Upload a project document, or enter the project by hand under
+                  Project details, then run an assessment.
+                </p>
+                <div className="actions" style={{ justifyContent: "center",
+                                                  borderTop: 0, paddingTop: 12 }}>
+                  <button className="btn" onClick={() => setView("uploads")}>
+                    Upload a document
+                  </button>
+                  <button className="btn btn--ghost"
+                          onClick={() => setView("project")}>
+                    Enter it by hand
+                  </button>
+                </div>
+              </div>
+            )}
         </div>
       </main>
     </div>

@@ -48,6 +48,14 @@ class Flag:
     message: str
     source: str = ""
     observed: str = ""
+    # Other fields implicated in the same finding.
+    #
+    # A consistency rule compares two values and can only report one. Capacity
+    # against generation, capital cost against tariff — the rule knows both are
+    # involved but names the one it happens to be registered under, and that is
+    # frequently not the one a reviewer needs to change. Queuing only that field
+    # leaves the real correction unreachable.
+    related: tuple[str, ...] = ()
 
     def __str__(self) -> str:
         return f"[{self.severity.value}] {self.field_name}: {self.message}"
@@ -105,9 +113,11 @@ def _number(data: ProjectExtraction, name: str) -> Decimal | None:
         return None
 
 
-def _flag(rule_id, name, severity, message, source="", observed="") -> Flag:
+def _flag(rule_id, name, severity, message, source="", observed="",
+          related=()) -> Flag:
     return Flag(rule_id=rule_id, field_name=name, severity=severity,
-                message=message, source=source, observed=str(observed))
+                message=message, source=source, observed=str(observed),
+                related=tuple(related))
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +276,8 @@ def capacity_factor_plausible(data: ProjectExtraction) -> Flag | None:
             f"Implied capacity factor is {factor:.1%}, outside the plausible "
             f"5–65% band for grid-connected renewables. Capacity and "
             f"generation disagree — one of them has a unit error.",
-            observed=f"{capacity} MW / {generation} MWh")
+            observed=f"{capacity} MW / {generation} MWh",
+            related=("installed_capacity_mw",))
     return None
 
 
@@ -288,7 +299,8 @@ def revenue_covers_opex(data: ProjectExtraction) -> Flag | None:
                      "Annual operating cost exceeds annual energy revenue. "
                      "Usually a unit mismatch between the tariff and the cost "
                      "figures — lakh against rupees, for instance.",
-                     observed=f"opex {opex} vs revenue {revenue}")
+                     observed=f"opex {opex} vs revenue {revenue}",
+                     related=("tariff_per_mwh",))
     return None
 
 
@@ -309,4 +321,51 @@ def capex_per_mw_plausible(data: ProjectExtraction) -> Flag | None:
     if per_mw <= 0:
         return _flag("consistency.capex_scale", "capex", Severity.ERROR,
                      "Capital cost must be greater than zero.", observed=capex)
+    return None
+
+
+@rule(id="consistency.payback_period", field_name="capex",
+      description="Implied simple payback must be plausible for the asset.",
+      source="Derived check — catches mixed currency scales")
+def payback_period_plausible(data: ProjectExtraction) -> Flag | None:
+    """Capital cost against annual net revenue.
+
+    Documents state capital cost in lakh or crore and tariffs in rupees, and
+    nothing in either figure alone reveals the mismatch. Divided, it is
+    unmistakable: a utility-scale renewable plant pays back in roughly four to
+    twenty-five years, so a payback of weeks means the two numbers are on
+    different scales.
+
+    Found on a real document whose capital cost was "INR 40,000 lakh" and
+    tariff "INR 3,000 per MWh" — the resulting return was so large the IRR
+    solver could not bracket it and returned nothing at all.
+    """
+    capex = _number(data, "capex")
+    tariff = _number(data, "tariff_per_mwh")
+    generation = _number(data, "expected_annual_generation_mwh")
+    opex = _number(data, "annual_opex") or Decimal(0)
+    if not capex or not tariff or not generation:
+        return None
+
+    net_revenue = tariff * generation - opex
+    if net_revenue <= 0:
+        return None
+
+    years = capex / net_revenue
+    if years < Decimal("1"):
+        return _flag(
+            "consistency.payback_period", "capex", Severity.ERROR,
+            f"Implied payback is {years * 12:.1f} months. Capital cost and "
+            f"tariff appear to be on different scales — a cost in lakh or "
+            f"crore against a tariff in rupees produces this. State both in "
+            f"the same unit.",
+            observed=f"capex {capex} vs net revenue {net_revenue:.0f}/yr",
+            related=("tariff_per_mwh", "annual_opex"))
+    if years > 40:
+        return _flag(
+            "consistency.payback_period", "capex", Severity.WARNING,
+            f"Implied payback is {years:.0f} years, beyond the asset's likely "
+            f"life. Check the capital cost and tariff units.",
+            observed=f"capex {capex} vs net revenue {net_revenue:.0f}/yr",
+            related=("tariff_per_mwh",))
     return None
