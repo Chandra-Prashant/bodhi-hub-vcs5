@@ -222,7 +222,23 @@ def _additionality(add: AdditionalityResult | None) -> list[str]:
         return lines
 
     inv = add.investment
-    if inv.irr_without_credits is None:
+    # A missing IRR has two opposite causes and only one of them supports
+    # additionality. No sign change in the cashflows means the project never
+    # turns positive — genuinely unable to meet any benchmark. A rate outside
+    # the solver's range means the opposite: returns so large the bisection
+    # could not bracket them, which in practice means the inputs are on
+    # different scales. Asserting the favourable reading for both would put a
+    # claim in the Project Description that the figures do not support.
+    out_of_range = any(f.check == "vt0008.irr_out_of_range"
+                       for f in add.findings)
+    if inv.irr_without_credits is None and out_of_range:
+        lines.append(
+            "The project internal rate of return could not be determined: the "
+            "value lies outside a plausible range, which indicates the capital "
+            "cost, operating cost and tariff are not stated in the same units. "
+            "Condition 5.4.2(2)(a) cannot be assessed until the financial "
+            "model is restated consistently.")
+    elif inv.irr_without_credits is None:
         lines.append(
             "The project generates no positive net cashflow in the absence of "
             "carbon credit revenue and therefore has no defined internal rate "
@@ -255,14 +271,26 @@ def _additionality(add: AdditionalityResult | None) -> list[str]:
         f"variations tested.")
 
     cp = add.common_practice_result
-    lines.append(
-        f"Common practice analysis was conducted in accordance with VT0008 "
-        f"Section 5.5.2. Of {cp.n_all} similar projects identified in the "
-        f"applicable geographic area, {cp.n_diff} exhibit essential "
-        f"distinctions, giving F = {cp.f_factor:.1%} and N_all − N_diff = "
-        f"{cp.n_all - cp.n_diff}. The project "
-        f"{'is' if cp.is_common_practice else 'is not'} considered common "
-        f"practice.")
+    if not cp.assessed:
+        # The count of similar projects is a search the proponent performs; it
+        # is not in a project document. Writing "0 similar projects identified"
+        # would put a favourable claim into the Project Description that nobody
+        # established — the section says plainly that the work is outstanding.
+        lines.append(
+            "Common practice analysis under VT0008 Section 5.5.2 has not yet "
+            "been completed. The count of similar projects in the applicable "
+            "geographic area, and how many of those exhibit essential "
+            "distinctions, must be established by the project proponent and "
+            "recorded here before validation.")
+    else:
+        lines.append(
+            f"Common practice analysis was conducted in accordance with VT0008 "
+            f"Section 5.5.2. Of {cp.n_all} similar projects identified in the "
+            f"applicable geographic area, {cp.n_diff} exhibit essential "
+            f"distinctions, giving F = {cp.f_factor:.1%} and N_all − N_diff = "
+            f"{cp.n_all - cp.n_diff}. The project "
+            f"{'is' if cp.is_common_practice else 'is not'} considered common "
+            f"practice.")
     lines.append(f"Conclusion: the project activity is "
                  f"{add.verdict.value.replace('_', ' ').lower()}.")
     return lines

@@ -125,6 +125,7 @@ def ingest(
     content: bytes,
     extractor: Extractor,
     request: Request | None = None,
+    project_id: uuid.UUID | None = None,
 ) -> IngestionOutcome:
     """Run one document through the pipeline and persist the result."""
     check_upload(filename, content)
@@ -133,6 +134,10 @@ def ingest(
     existing = db.scalar(
         select(Document).where(
             Document.organization == user.organization,
+            # Scoped to the project: the same grid study can legitimately
+            # support two projects, and refusing the second upload would force
+            # a rename to work around it.
+            Document.project_id == project_id,
             Document.content_hash == digest,
         )
     )
@@ -149,6 +154,7 @@ def ingest(
                           content)
 
     document = Document(
+        project_id=project_id,
         filename=stored_name,
         content_hash=digest,
         byte_size=len(content),

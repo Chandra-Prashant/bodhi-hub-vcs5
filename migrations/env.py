@@ -18,7 +18,9 @@ from app.core.database import Base
 # Importing the model modules is what registers their tables on Base.metadata.
 # A module missing from this list is invisible to autogenerate, which produces
 # an empty migration rather than an error.
+from app.models import draft as _draft  # noqa: F401
 from app.models import ingestion as _ingestion  # noqa: F401
+from app.models import project as _project  # noqa: F401
 from app.models import rag as _rag  # noqa: F401
 from app.models import user as _user  # noqa: F401
 

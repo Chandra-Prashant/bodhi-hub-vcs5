@@ -34,6 +34,7 @@ from app.models.ingestion import (
     ReviewItem,
     ReviewState,
 )
+from app.models.project import Project
 from app.models.user import Role, User
 from app.schemas.ingestion import (
     DocumentOut,
@@ -80,11 +81,19 @@ def _extractor():
              status_code=status.HTTP_201_CREATED)
 async def upload(
     request: Request,
+    project_id: uuid.UUID,
     file: UploadFile = File(...),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> UploadResponse:
     """Upload a document, extract it, validate it, and queue what needs review."""
+    # The project must exist and belong to the caller before anything is read
+    # from the upload — a document with no project has nowhere to belong.
+    project = db.get(Project, project_id)
+    if project is None or project.organization != user.organization:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Project not found.")
+
     content = await file.read()
     filename = file.filename or "document"
 
@@ -99,7 +108,8 @@ async def upload(
                             detail=str(exc))
 
     try:
-        outcome = ingest(db, user, filename, content, _extractor(), request)
+        outcome = ingest(db, user, filename, content, _extractor(), request,
+                         project_id=project_id)
     except UploadRejected as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail=str(exc))
@@ -108,12 +118,16 @@ async def upload(
 
 @router.get("", response_model=list[DocumentOut])
 def list_documents(
+    project_id: uuid.UUID,
     document_status: DocumentStatus | None = None,
     limit: int = 50,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[Document]:
-    stmt = select(Document).where(Document.organization == user.organization)
+    stmt = select(Document).where(
+        Document.organization == user.organization,
+        Document.project_id == project_id,
+    )
     if document_status is not None:
         stmt = stmt.where(Document.status == document_status)
     return list(db.scalars(
@@ -122,6 +136,7 @@ def list_documents(
 
 @router.get("/queue", response_model=list[ReviewItemOut])
 def review_queue(
+    project_id: uuid.UUID,
     limit: int = 100,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -132,11 +147,17 @@ def review_queue(
     it holds fields, not documents, so a reviewer touches the three uncertain
     values rather than re-checking a whole report.
     """
+    # Joined through the extraction to its document so the queue shows only
+    # this project's items. A reviewer looking at Aligarh must never be shown a
+    # flagged field from Kutch.
     return list(db.scalars(
         select(ReviewItem)
+        .join(Extraction, Extraction.id == ReviewItem.extraction_id)
+        .join(Document, Document.id == Extraction.document_id)
         .where(
             ReviewItem.organization == user.organization,
             ReviewItem.state == ReviewState.PENDING,
+            Document.project_id == project_id,
         )
         .order_by(_SEVERITY_ORDER, ReviewItem.created_at)
         .limit(min(limit, 500))))

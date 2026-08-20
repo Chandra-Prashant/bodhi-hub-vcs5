@@ -7,7 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import assessment, auth, classification, documents, pdd
+from app.api import (
+    assessment, auth, classification, documents, pdd, projects,
+)
 from app.core.config import settings
 
 app = FastAPI(
@@ -40,6 +42,7 @@ app.include_router(auth.admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(classification.router, prefix=settings.API_V1_PREFIX)
 app.include_router(pdd.router, prefix=settings.API_V1_PREFIX)
 app.include_router(assessment.router, prefix=settings.API_V1_PREFIX)
+app.include_router(projects.router, prefix=settings.API_V1_PREFIX)
 app.include_router(documents.router, prefix=settings.API_V1_PREFIX)
 
 

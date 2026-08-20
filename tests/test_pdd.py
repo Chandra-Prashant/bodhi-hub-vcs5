@@ -251,3 +251,80 @@ def test_repeated_labels_are_written_only_once(tmp_path):
               for t in doc.tables for r in t.rows
               if len(r.cells) >= 2 and r.cells[0].text.strip() == "Project name"]
     assert values.count("Aligarh Solar One") == 1
+
+
+# --- an absent figure must not become a favourable claim -------------------
+
+def _additionality_prose(add):
+    from app.domain.pdd_content import _additionality
+
+    return " ".join(_additionality(add))
+
+
+def test_an_unassessed_common_practice_is_reported_as_outstanding():
+    """Writing "0 similar projects identified" would put a favourable claim in
+    the Project Description that nobody established."""
+    from app.domain.additionality import FinancialInputs, assess_additionality
+
+    add = assess_additionality(
+        FinancialInputs(capex=25_000, annual_opex=500,
+                        annual_generation_mwh=87_600, tariff_per_mwh=0.03,
+                        project_lifetime_years=25, discount_rate=0.10,
+                        benchmark_irr=0.14, credit_price_per_tco2e=0.008,
+                        annual_credits_tco2e=None),
+        n_all=None, n_diff=0, project_capacity_mw=50.0,
+        regulatory_surplus=True)
+
+    prose = _additionality_prose(add)
+    assert "has not yet been completed" in prose
+    assert "0 similar projects" not in prose
+
+
+def test_an_out_of_range_return_is_not_written_as_no_cashflow():
+    """A missing IRR has two opposite causes. Out of range means the project is
+    wildly profitable; no sign change means it never turns positive. Only the
+    second supports additionality."""
+    from app.domain.additionality import FinancialInputs, assess_additionality
+
+    add = assess_additionality(
+        # Mixed units: capex in lakh against a tariff in rupees.
+        FinancialInputs(capex=40_000, annual_opex=500,
+                        annual_generation_mwh=87_600, tariff_per_mwh=3_000,
+                        project_lifetime_years=25, discount_rate=0.10,
+                        benchmark_irr=0.14, credit_price_per_tco2e=0.008,
+                        annual_credits_tco2e=None),
+        n_all=None, n_diff=0, project_capacity_mw=50.0,
+        regulatory_surplus=True)
+
+    prose = _additionality_prose(add)
+    assert "outside a plausible range" in prose
+    assert "no positive net cashflow" not in prose
+
+
+def test_the_content_builder_survives_every_absent_figure():
+    """The combination that broke document-status in production: no grid data,
+    no similar-project search, mixed units."""
+    from datetime import date
+
+    from app.domain.additionality import FinancialInputs, assess_additionality
+    from app.domain.classification import ProjectIntake, classify
+    from app.domain.constants import Technology
+    from app.domain.pdd_content import ProjectIdentity, build_pdd_content
+
+    intake = ProjectIntake(
+        name="Aligarh Solar One", proponent="Bodhi Hub Client",
+        country_iso2="IN", technology=Technology.SOLAR_PV_TERRESTRIAL,
+        installed_capacity_mw=50.0, expected_annual_generation_mwh=87_600.0,
+        initial_crediting_period_start=date(2026, 3, 1))
+    add = assess_additionality(
+        FinancialInputs(capex=40_000, annual_opex=500,
+                        annual_generation_mwh=87_600, tariff_per_mwh=0.03,
+                        project_lifetime_years=25, discount_rate=0.10,
+                        benchmark_irr=0.14, credit_price_per_tco2e=0.008,
+                        annual_credits_tco2e=None),
+        n_all=None, n_diff=0, project_capacity_mw=50.0,
+        regulatory_surplus=True)
+
+    content = build_pdd_content(intake, classify(intake), ProjectIdentity(),
+                                None, None, add)
+    assert content.sections["Additionality Methods"]

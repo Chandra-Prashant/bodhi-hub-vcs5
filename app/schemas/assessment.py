@@ -36,7 +36,9 @@ class AssessmentRequest(BaseModel):
     grid_units: list[PowerUnitIn] = Field(default_factory=list)
     project_emissions: ProjectEmissionsIn | None = None
     financials: FinancialsIn | None = None
-    similar_projects_all: int = Field(default=0, ge=0)
+    # None means "not searched yet", which is not the same as zero. See
+    # app/domain/additionality.common_practice.
+    similar_projects_all: int | None = Field(default=None, ge=0)
     similar_projects_distinct: int = Field(default=0, ge=0)
     regulatory_surplus: bool = True
     esg_entries: list[ESGEntryIn] = Field(default_factory=list)
@@ -76,7 +78,9 @@ class AdditionalitySummary(BaseModel):
     benchmark_irr: float
     sensitivity_robust: bool
     meets_ccp_conditions: bool
-    f_factor: float
+    # None when no similar-project search has been supplied — distinct from a
+    # search that returned zero.
+    f_factor: float | None
     is_common_practice: bool
 
 

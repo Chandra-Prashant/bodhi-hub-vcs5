@@ -304,7 +304,9 @@ export function Additionality({ additionality }) {
     );
   }
 
-  const pct = (v) => (v == null ? "undefined" : `${(v * 100).toFixed(2)}%`);
+  // An em dash, never the string "undefined". A figure the engine could not
+  // compute is an absence with a reason, and the row's note carries the reason.
+  const pct = (v) => (v == null ? "—" : `${(v * 100).toFixed(2)}%`);
   const additional = additionality.verdict === "ADDITIONAL";
 
   const rows = [
@@ -317,7 +319,13 @@ export function Additionality({ additionality }) {
     {
       label: "Project IRR with credit revenue",
       value: pct(additionality.irr_with_credits),
-      work: `Credit revenue applied over the crediting period only`,
+      // An absent figure needs its reason on the row. Left unexplained it
+      // reads as a failure of the system rather than a missing input.
+      work: additionality.irr_with_credits == null
+        ? "Not computed — the credit volume is unknown until grid dispatch "
+          + "data is supplied. Condition (a), which decides additionality, "
+          + "does not depend on it"
+        : "Credit revenue applied over the crediting period only",
       clause: "VCS Standard v5.0 · Table 8",
     },
     {
@@ -328,10 +336,19 @@ export function Additionality({ additionality }) {
     },
     {
       label: "Common practice factor",
-      value: `${(additionality.f_factor * 100).toFixed(1)}%`,
-      work: additionality.is_common_practice
-        ? "Common practice — the project is not additional"
-        : "Below the threshold, or too few similar projects (footnote 17)",
+      // Null means no search was supplied, which is not the same as a search
+      // that found nothing. Rendering it as 0.0% would present a missing
+      // input as a favourable result.
+      value: additionality.f_factor == null
+        ? "—"
+        : `${(additionality.f_factor * 100).toFixed(1)}%`,
+      work: additionality.f_factor == null
+        ? "Not assessed — the count of similar projects in the applicable "
+          + "geography has not been supplied. Its absence is not evidence "
+          + "that none exist"
+        : additionality.is_common_practice
+          ? "Common practice — the project is not additional"
+          : "Below the threshold, or too few similar projects (footnote 17)",
       clause: "VT0008 v1.0 · s5.5.2",
     },
     {

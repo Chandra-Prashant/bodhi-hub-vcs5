@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
-import { api, downloadBlob, setToken } from "./api.js";
+import React, { useEffect, useRef, useState } from "react";
+import { api, downloadBlob, setSessionLostHandler, setToken } from "./api.js";
 import { emptyProject, isRunnable, sampleProject } from "./sample.js";
 import { DocumentPanel } from "./components/DocumentPanel.jsx";
 import { EsgEditor } from "./components/EsgEditor.jsx";
+import { ProjectBar, RunAssessment } from "./components/Projects.jsx";
 import { ReviewQueue, UploadPanel } from "./components/ReviewPanels.jsx";
 import { Login, ProjectForm } from "./components/Forms.jsx";
 import {
@@ -38,6 +39,15 @@ export default function App() {
   const [regulatory, setRegulatory] = useState(null);
   const [docStatus, setDocStatus] = useState(null);
   const [docBusy, setDocBusy] = useState(false);
+  // "saved" | "unsaved" — shown in the header so a failed save is visible
+  // rather than silent, which is how an hour of ESG work was lost.
+  const [saveState, setSaveState] = useState("saved");
+  const [projects, setProjects] = useState([]);
+  const [currentProject, setCurrentProject] = useState(null);
+  // field name -> [{filename, page, source_text}], so a value can show which
+  // document it came from once a project holds more than one.
+  const [provenance, setProvenance] = useState({});
+  const [conflicts, setConflicts] = useState([]);
   const [esgSchema, setEsgSchema] = useState(null);
   const [esgReview, setEsgReview] = useState(null);
   const [esgBusy, setEsgBusy] = useState(false);
@@ -81,11 +91,29 @@ export default function App() {
       // reviewer corrections and dropped rejected values, so this is what was
       // actually used — not what the document said.
       if (response.project) {
-        setProject({
+        // Merge onto the CURRENT project, not onto an empty one. The handover
+        // payload is built from the document, so it carries no ESG entries —
+        // spreading it over a blank project silently discarded twelve
+        // categories of judgement a person had typed, and the debounced save
+        // then wrote that empty version over the stored one.
+        //
+        // Anything the assessment establishes wins; anything it has no opinion
+        // about is kept.
+        setProject((current) => ({
           ...emptyProject,
+          ...current,
           ...response.project,
-          financials: response.project.financials ?? null,
-        });
+          financials: response.project.financials ?? current.financials ?? null,
+          esg_entries: current.esg_entries ?? [],
+        }));
+        // Assemble the Project Description from the same payload, so tab 07
+        // reflects the assessment that just ran rather than telling the user
+        // to run one.
+        try {
+          setDocStatus(await api.documentStatus(response.project));
+        } catch {
+          setDocStatus(null);
+        }
       }
       setView("register");
     } catch (err) {
@@ -98,11 +126,78 @@ export default function App() {
     }
   }
 
-  async function refreshIngestion() {
+  function selectProject(project) {
+    setCurrentProject(project);
+    // Everything on screen belongs to the project being left. Clear it before
+    // loading the next, so nothing from Aligarh can appear under Kutch.
+    setResult(null);
+    setDocStatus(null);
+    setNotes([]);
+    setEsgReview(null);
+    setProvenance({});
+    setConflicts([]);
+    setProject({ ...emptyProject, ...(project.state ?? {}) });
+    refreshIngestion(project.id);
+  }
+
+  async function createProject(name) {
+    setBusy(true);
+    setError("");
+    try {
+      const created = await api.createProject(name);
+      setProjects((list) => [created, ...list]);
+      selectProject(created);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function assessProject() {
+    if (!currentProject) return;
+    setBusy(true);
+    setError("");
+    setConflicts([]);
+    try {
+      const response = await api.assessProject(currentProject.id);
+      setResult(response.assessment);
+      setProvenance(response.provenance ?? {});
+      setProject((current) => ({
+        ...emptyProject,
+        ...current,
+        ...response.project,
+        esg_entries: current.esg_entries ?? [],
+      }));
+      try {
+        setDocStatus(await api.documentStatus(response.project));
+      } catch {
+        setDocStatus(null);
+      }
+    } catch (err) {
+      // A conflict is not an error to apologise for — it is the system
+      // refusing to choose between two source documents. Show both.
+      const detail = err.detail ?? err.body?.detail;
+      if (detail?.conflicts) {
+        setConflicts(detail.conflicts);
+      } else {
+        setError(err.message);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshIngestion(projectId = currentProject?.id) {
+    if (!projectId) {
+      setDocuments([]);
+      setQueue([]);
+      return;
+    }
     try {
       const [docs, items] = await Promise.all([
-        api.documents(),
-        api.reviewQueue(),
+        api.documents(projectId),
+        api.reviewQueue(projectId),
       ]);
       setDocuments(docs);
       setQueue(items);
@@ -115,7 +210,7 @@ export default function App() {
     setUploadBusy(true);
     setError("");
     try {
-      const result = await api.uploadDocument(file);
+      const result = await api.uploadDocument(currentProject.id, file);
       setLastUpload(result);
       await refreshIngestion();
     } catch (err) {
@@ -157,13 +252,23 @@ export default function App() {
   }
 
   function clearProject() {
+    api.clearDraft().catch(() => {});
     setProject(emptyProject);
     setResult(null);
     setDocStatus(null);
   }
 
+  // When renewal fails the session is genuinely over; return to the sign-in
+  // screen rather than leaving a dead interface showing stale data.
+  setSessionLostHandler(() => {
+    setUser(null);
+    setResult(null);
+    setDocuments([]);
+    setQueue([]);
+  });
+
   function signOut() {
-    setToken(null);
+    setToken(null, null);
     setUser(null);
     setProject(emptyProject);
     setResult(null);
@@ -177,8 +282,19 @@ export default function App() {
     setAuthError("");
     try {
       const tokens = await api.login(email, password);
-      setToken(tokens.access_token);
+      // Keep the refresh token so a short-lived access token can be renewed
+      // rather than ending the session mid-task.
+      setToken(tokens.access_token, tokens.refresh_token ?? null);
       setUser(await api.me());
+      // Restore whatever was being worked on. Twelve categories of ESG
+      // judgement is an hour of typing; losing it to a sign-out was the
+      // single worst thing this interface did.
+      try {
+        const saved = await api.readDraft();
+        if (saved?.state) setProject({ ...emptyProject, ...saved.state });
+      } catch {
+        // A draft that will not load must not block sign-in.
+      }
     } catch (err) {
       setAuthError(err.message);
     } finally {
@@ -200,6 +316,24 @@ export default function App() {
       setBusy(false);
     }
   }
+
+  // Persist the working state a moment after typing stops. Debounced because
+  // every keystroke in an ESG box would otherwise be a write, and saving is
+  // not so urgent that it needs to race the user.
+  const saveTimer = useRef(null);
+  useEffect(() => {
+    if (!user || !project?.name) return undefined;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    setSaveState("saving");
+    saveTimer.current = setTimeout(() => {
+      (currentProject
+        ? api.saveProjectState(currentProject.id, project)
+        : api.writeDraft(project))
+        .then(() => setSaveState("saved"))
+        .catch(() => setSaveState("unsaved"));
+    }, 1200);
+    return () => clearTimeout(saveTimer.current);
+  }, [project, user]);
 
   async function downloadPdd(stripGuidance) {
     setDocBusy(true);
@@ -234,7 +368,14 @@ export default function App() {
     // put there.
     api.regulatoryStatus().then(setRegulatory).catch(() => setRegulatory(null));
     api.esgSchema().then(setEsgSchema).catch(() => setEsgSchema(null));
-    refreshIngestion();
+    api.listProjects()
+      .then((list) => {
+        setProjects(list);
+        // Open the most recent project rather than nothing: a user with one
+        // project should not have to select it every time.
+        if (list.length && !currentProject) selectProject(list[0]);
+      })
+      .catch(() => setProjects([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
@@ -326,6 +467,14 @@ export default function App() {
           </div>
         </header>
 
+        <ProjectBar
+          projects={projects}
+          current={currentProject}
+          onSelect={selectProject}
+          onCreate={createProject}
+          busy={busy}
+        />
+
         <div className="canvas">
           {error && <div className="alert" style={{ marginBottom: 20 }}>{error}</div>}
 
@@ -404,6 +553,15 @@ export default function App() {
           )}
 
           {view === "queue" && (
+            <>
+            <RunAssessment
+              onRun={currentProject ? assessProject : run}
+              busy={busy}
+              disabled={!currentProject && !project.name}
+              hint={"Re-runs with your corrections applied."}
+              conflicts={conflicts}
+            />
+            
             <section className="section">
               <div className="section__head">
                 <h2>Review queue</h2>
@@ -417,9 +575,19 @@ export default function App() {
                 busy={uploadBusy}
               />
             </section>
+            </>
           )}
 
           {view === "esg" && (
+            <>
+            <RunAssessment
+              onRun={currentProject ? assessProject : run}
+              busy={busy}
+              disabled={!currentProject && !project.name}
+              hint={"Re-runs with this ESG assessment included."}
+              conflicts={conflicts}
+            />
+            
             <section className="section">
               <div className="section__head">
                 <h2>ESG risk assessment</h2>
@@ -436,6 +604,7 @@ export default function App() {
                 busy={esgBusy}
               />
             </section>
+            </>
           )}
 
           {view === "document" && (

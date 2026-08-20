@@ -87,7 +87,9 @@ def db_engine():
     # the session failing. The project's own Docker image installs pgvector,
     # so this path is for local instances only.
     from app.core.database import Base
+    from app.models import draft as _draft  # noqa: F401
     from app.models import ingestion as _ingestion  # noqa: F401
+    from app.models import project as _project  # noqa: F401
     from app.models import rag as _rag  # noqa: F401
     from app.models import user as _user  # noqa: F401
 
@@ -200,3 +202,14 @@ def auth_headers(client, login):
         assert response.status_code == 200, response.text
         return {"Authorization": f"Bearer {response.json()['access_token']}"}
     return _headers
+
+
+@pytest.fixture
+def admin_headers(make_user, auth_headers):
+    """A signed-in ADMIN for the Bodhi Hub organisation."""
+    from app.models.user import Role
+
+    user = make_user(email="draft-admin@bodhihub.com",
+                     password="correct-horse-battery",
+                     role=Role.ADMIN, organization="Bodhi Hub")
+    return auth_headers(user.email, "correct-horse-battery")

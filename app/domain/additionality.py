@@ -327,13 +327,19 @@ def sensitivity_analysis(
 class CommonPracticeResult:
     n_all: int
     n_diff: int
-    f_factor: float
+    f_factor: float | None
     is_common_practice: bool
+
+    @property
+    def assessed(self) -> bool:
+        """False when no search has been supplied — distinct from a search
+        that found nothing."""
+        return self.n_all is not None
     findings: list[Finding] = field(default_factory=list)
 
 
 def common_practice(
-    n_all: int,
+    n_all: int | None,
     n_diff: int,
     project_capacity_mw: float,
 ) -> CommonPracticeResult:
@@ -355,10 +361,26 @@ def common_practice(
         f"Similar-project capacity band is {band[0]:g}–{band[1]:g} MW "
         f"(±50% of {project_capacity_mw:g} MW).", f"{VT0008} s5.5.2(1)"))
 
+    if n_all is None:
+        # Not the same as zero. Zero means somebody searched and found none;
+        # None means nobody has searched yet. Reporting the second as "not
+        # common practice" turns a missing input into a favourable finding —
+        # the failure mode this whole engine exists to prevent.
+        findings.append(Finding(
+            "vt0008.step4", Severity.WARNING,
+            "Common practice has not been assessed: the count of similar "
+            "projects in the applicable geography has not been supplied. This "
+            "is a search the proponent performs; it cannot be inferred from a "
+            "project document, and its absence is not evidence that no similar "
+            "projects exist.",
+            f"{VT0008} s5.5.2"))
+        return CommonPracticeResult(None, n_diff, None, False, findings)
+
     if n_all <= 0:
         findings.append(Finding(
             "vt0008.step4", Severity.PASS,
-            "No similar projects identified; not common practice.",
+            "No similar projects identified in the applicable geography; not "
+            "common practice.",
             f"{VT0008} s5.5.2"))
         return CommonPracticeResult(n_all, n_diff, 0.0, False, findings)
 
@@ -402,7 +424,7 @@ class AdditionalityResult:
 
 def assess_additionality(
     inputs: FinancialInputs,
-    n_all: int,
+    n_all: int | None,
     n_diff: int,
     project_capacity_mw: float,
     regulatory_surplus: bool,

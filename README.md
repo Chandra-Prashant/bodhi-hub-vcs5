@@ -1,62 +1,226 @@
-# Bodhi Hub — Audit Automation & Document Generation
+# Bodhi Hub — VCS v5.0 Audit Automation
 
-Internal tool implementing the architecture in `PRD.md`, `Architecture.md`,
-`Rules.md`, `Design.md` and `Phases.md`, applied to the VCS v5.0 domain
-specified in the Verra requirements mapping.
+Reads project documents, checks what it finds, asks a person about anything
+doubtful, performs the regulated calculations, and produces a Verra Project
+Description in which every figure cites the clause that governs it.
 
-The pipeline runs end to end, from the browser:
+Built against VCS Standard v5.0 and methodology VMR0017 v1.0 (a revision of
+CDM ACM0002 v22.0) for grid-connected solar photovoltaic and wind projects.
 
-```
-upload → extract → validate → flag → review → assess → generate → export
-```
-
-The calculation engine is the Verra methodology: **VMR0017 v1.0** (an ACM0002
-v22.0 revision) for grid-connected solar PV and wind.
-
-**613 tests passing** — 586 domain, 27 endpoint.
-
-> **Not yet run against a real model.** Every verification used stubbed
-> extraction and narrative models — the fake output and the assertion about it
-> were both written here. Extraction quality on a real PDF, reading a
-> photographed form, whether confidence scores mean anything, and whether the
-> narrative model respects the placeholder rule in practice are all unproven.
-> Set `GEMINI_API_KEY` and put one real document through before any demo.
+**747 tests passing.**
 
 ---
 
-## The rule everything serves
+## The rule the design serves
 
-> Rules.md, hard rule: the LLM must never generate, alter, or estimate any
-> numeric calculation.
+> The LLM must never generate, alter, or estimate any numeric calculation.
+> — Rules.md, Hard Rule
 
-Every number originates in `app/domain/`, which imports no database session and
-no model client. A validation body must be able to reproduce any reported
-figure by hand from the clause cited beside it.
-
-Stating that rule is easy. There are four distinct ways to break it, and each
+Stating that is easy. Honouring it is not, because there are four distinct ways
+to break it and two of them produce output that looks entirely correct. Each
 has a mechanism rather than an instruction:
 
-| Way it breaks | What stops it |
+| How the rule could break | What prevents it |
 |---|---|
-| The model does arithmetic | All calculation is in `app/domain/`, pure and tested |
-| The model *reads* a computed figure off a source document and carries it forward | `extraction/guards.py` — the schema is checked against a blocklist of engine outputs at import time |
-| A retrieved past report's figures leak into new prose | `rag/redaction.py` — every figure is stripped before indexing, so there is nothing to copy |
-| The model types a number into narrative text | `generation/placeholders.py` — drafts must use `{{placeholders}}`; a literal digit is rejected and the section regenerated |
+| The model does arithmetic | All calculation lives in `app/domain/` — no AI, no database access, covered by tests against the clause each implements |
+| The model reads an already-calculated figure off a document and carries it forward | `app/extraction/guards.py` checks the extraction schema at import time against every value the engine computes. A build that tried to extract emission reductions would fail before running |
+| Figures from a past client report leak into new prose | `app/rag/redaction.py` strips every number before indexing, so there is nothing to copy |
+| The model types a number into narrative | `app/generation/placeholders.py` rejects a draft containing digits and rewrites it |
 
-The second and fourth are the subtle ones. Both produce output that is fluent,
-specific, wrong, and passes every other check — because no calculation was
-performed at all.
+The second and fourth are the subtle ones: a figure appears that nobody
+calculated, and every other check passes because no calculation took place.
 
-**Missing data goes to a person, never to a search.** A required field absent
-from a document is flagged, blocks the calculation, and lands in the review
-queue for manual entry. Filling it from anywhere else would put an unsourced,
-untraceable figure into a report under Bodhi-hub's name.
+### The failure mode this system is built against
 
-The same discipline governs judgement. The ESG module does not invent risks;
-the not-applicable pass does not touch safeguards sections; validation rules
-fire regardless of extraction confidence, because a model can read a typo
-perfectly; and an unrecognised technology string is refused rather than matched
-to the nearest type.
+Every serious bug found during development was the same shape — **an absence
+rendered as a result**:
+
+- an unread field looking extracted
+- a failed extraction looking approved
+- a missing similar-project search reported as "not common practice", which is
+  favourable
+- an IRR the solver could not bracket described as "no positive net cashflow",
+  which is also favourable
+
+Each produced output that was fluent, plausible, and wrong in the project's
+favour. Where a value is unknown the system says so; where two sources
+disagree it refuses to choose. That is the point of it.
+
+---
+
+## Getting started
+
+```bash
+cp .env.example .env          # set SECRET_KEY, POSTGRES_PASSWORD, GEMINI_API_KEY
+docker compose up -d          # PostgreSQL with pgvector
+alembic upgrade head
+PYTHONPATH=. python scripts/create_admin.py
+uvicorn app.main:app --reload --port 8000
+```
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+Then http://localhost:5173.
+
+Tests need a database:
+
+```bash
+pytest -q
+```
+
+### Configuration
+
+| Variable | Notes |
+|---|---|
+| `SECRET_KEY` | 32 characters minimum |
+| `POSTGRES_PASSWORD` | URL-encoded internally; `@` and `%` are safe |
+| `GEMINI_API_KEY` | Extraction and narrative |
+| `GEMINI_MODEL` | Default `gemini-flash-latest` |
+| `EMBEDDING_MODEL` | `gemini-embedding-001` |
+| `EMBEDDING_DIM` | 768. Truncated from the model's 3072 and re-normalised. Changing it requires a migration — the column is sized to it |
+| `STORAGE_BACKEND` | `local` or `s3` |
+
+---
+
+## How it is used
+
+Projects hold documents. Each project has its own documents, review queue, ESG
+assessment and Project Description; nothing crosses between them.
+
+```
+create project → upload documents → extract → validate → flag
+              → review → assess → generate → export
+```
+
+| Tab | Purpose | Takes input? |
+|---|---|---|
+| **Uploads** | PDF, Word, Excel, CSV or a photograph of a form. ~13 fields extracted with a confidence score and the source sentence | The file |
+| **Review queue** | Only flagged *fields*, not whole documents. Shows the extracted value beside what the document says | **Yes** — approve / edit / reject |
+| **Compliance register** | 20 VCS v5.0 requirements with clause, status and evidence. Exports the traceability matrix | No |
+| **Quantification** | Operating margin → build margin → combined margin → baseline → leakage → reductions, each row with its arithmetic and clause | No |
+| **Additionality** | IRR with and without credits, benchmark, sensitivity, common practice, CCP eligibility | No |
+| **ESG risk** | 12 safeguard categories. You supply severity and likelihood; the level is computed from Verra's matrix | **Yes** — judgement |
+| **Project Description** | Completion state, what still needs an author, and the download | No |
+| **Project details** | Manual intake and financial model | **Yes** — if no document |
+
+**Run assessment** appears on every tab that takes input, so completing the ESG
+assessment does not mean navigating elsewhere to see its effect.
+
+### Two downloads
+
+**Working draft** keeps Verra's guidance text, which is what tells an author
+what each unwritten section requires. **Submission copy** strips it, and is
+refused while findings are unresolved — removing the guidance from an
+unfinished document deletes the only marks showing which sections were never
+written.
+
+### Several documents per project
+
+A project is described by a bundle: an information memorandum, a technical
+report, a financial model, a land schedule. Values merge across all of them,
+and each carries the file, page and sentence it came from.
+
+**Where two documents disagree, the assessment refuses rather than choosing.**
+
+```
+Documents disagree. Choose a value before calculating.
+  installed_capacity_mw:
+        50   Aligarh-PIM.pdf p1
+      49.5   Aligarh-Technical-Report.pdf p12
+```
+
+Neither alternative is defensible. "Newest wins" is silently wrong the day
+somebody uploads an old file last. "Highest confidence wins" sounds principled
+and is not — confidence measures how clearly a value was *read*, not whether it
+is *right*. A capacity that differs between two source documents is a fact
+about the project, not noise. See `app/services/merge.py`.
+
+Values differing only in formatting — `50` and `50.0` — are treated as
+agreement, so reviewers are not trained to dismiss conflicts.
+
+---
+
+## What the system will not write
+
+Roughly two-thirds of a Project Description assembles itself. The rest is
+marked `author_supplied` in `app/domain/compliance.py`: right to operate,
+project start date evidence, stakeholder engagement, no double counting,
+records.
+
+These are attestations, not descriptions. Somebody is stating a fact they can
+be held to, and there is no data in the system to support them. The model
+could produce a fluent paragraph confirming the proponent holds all necessary
+rights — it would read perfectly and be a fabrication, in a document submitted
+to a validation body.
+
+The system's contribution there is making sure none of them is missed.
+
+---
+
+## Architecture
+
+```
+app/domain/       Regulated calculation. No AI, no database. Pure functions,
+                  tested against the clause each implements
+app/extraction/   Model boundary. Reads documents into a fixed schema with
+                  per-field confidence, page and source sentence
+app/validation/   Deterministic rules. Fire regardless of confidence
+app/services/     Ingestion, handover, merge, storage, docx assembly, audit
+app/rag/          Past-report index. Numbers redacted before indexing
+app/generation/   Narrative drafting with placeholder enforcement
+app/api/          FastAPI routes
+frontend/         Vite + React
+```
+
+### Deliberate deviations from the spec
+
+- **pgvector rather than Chroma or Pinecone.** Architecture.md names the
+  latter. PostgreSQL was already required, so this is one datastore, one
+  backup, one deployment — and chunks live in the same transaction as
+  everything else.
+- **Images read directly by the model rather than a separate OCR step.**
+  Reading a form is extraction, which Rules.md already permits, and it removes
+  a stage at which a digit could change.
+
+---
+
+## Still needed from the client
+
+Four items. None can be substituted by further development.
+
+1. **300+ historical audit reports** — the RAG index is built and tested;
+   there is nothing to index. Every figure is stripped before indexing, so
+   these inform wording and structure only.
+2. **The existing formulas, written down** — including where rounding occurs
+   at intermediate steps. A formula matching only on the final figure while
+   rounding differently in the middle will agree on the sample and diverge in
+   production.
+3. **5–10 past audits with confirmed results** — Phase 2's stated exit
+   criterion is a 100% match against these. Format in `docs/GOLDEN_DATASET.md`.
+4. **Grid dispatch data** — the emission factor is calculated from the
+   generating units of the connected grid. A project document states its own
+   capacity; it does not describe the national grid. Without this,
+   quantification reports unavailable rather than assuming a factor.
+
+---
+
+## Known gaps
+
+- **Extraction accuracy has not been measured at scale.** The pipeline is
+  tested, and has been run against real documents, but no systematic accuracy
+  measurement has been done. Phases.md provides for it in Phase 3.
+- **CDM TOOL07 was not in the supplied documentation.** VT0011 modifies
+  specific paragraphs of it; the implementation follows the standard published
+  formulation and is marked in code as requiring verification.
+- **Not yet deployed.** Instructions in `DEPLOY.md`.
+- **Verra's ESG template pre-writes 44 risk questions.** The system assesses
+  one per category and reports the rest as outstanding rather than fabricating
+  answers.
+- **The generation-variance threshold is a review heuristic**, not a Verra
+  requirement, and is labelled as such wherever it appears.
+- **Multi-tenancy is application-layer**, not row-level security.
 
 ---
 
@@ -64,300 +228,25 @@ to the nearest type.
 
 | Phase | Status |
 |---|---|
-| 1 — Formulas & golden dataset | **Blocked — client deliverable.** See `docs/GOLDEN_DATASET.md` |
-| 2 — Calculation engine | **done** |
-| 3 — Extraction pipeline | **done** |
-| 4 — Validation & confidence scoring | **done** |
-| 5 — RAG index | **built, corpus not supplied** — nothing indexed |
-| 6 — Report generation | **done** — degrades gracefully with no corpus |
-| 7 — Review dashboard | **done** |
-| 8 — Audit trail & export | **done** |
-| 9 — Parallel run & rollout | Blocked on Phases 1 and 5 |
-
-### What the client still has to supply
-
-Four things, none of which code can substitute for:
-
-1. **The 300+ historical audit reports** — the style corpus for Phases 5 and 6.
-   `scripts/index_reports.py` is ready; there is nothing to index.
-2. **The existing calculation formulas**, written down, including **where
-   rounding happens at intermediate steps**. Matching only the final figure
-   while rounding differently in the middle agrees on the sample and diverges
-   in production.
-3. **Five to ten past audits with confirmed-correct results** — the golden
-   dataset. Phase 2's exit criterion is a 100% match against it.
-4. **Grid dispatch data** for the project electricity system. Without it the
-   emission factor cannot be computed, and an assessment run from a document
-   reports quantification as unavailable rather than inventing one.
-
----
-
-## Setup
-
-```bash
-conda create -n bodhi_vcs5 python=3.11 -y
-conda activate bodhi_vcs5
-pip install -r requirements-dev.txt
-
-cp .env.example .env
-python -c "import secrets; print(secrets.token_urlsafe(48))"
-```
-
-Put that in `SECRET_KEY`; set `POSTGRES_PASSWORD` and `GEMINI_API_KEY`.
-
-```bash
-docker compose up -d
-docker compose ps
-alembic upgrade head
-PYTHONPATH=. python scripts/create_admin.py
-uvicorn app.main:app --reload --port 8000
-```
-
-Interface, in a second terminal:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-http://localhost:5173 · API docs at http://127.0.0.1:8000/docs
-
-**The app opens empty.** No project is loaded and no assessment runs at
-sign-in — a tool that greets a new user with somebody else's numbers is one
-they cannot trust, because they have no way to tell which figures on screen are
-theirs. A worked example is available behind *Load sample project* on the
-Project details tab.
-
----
-
-## The flow
-
-**1. Upload** — PDF, Word, Excel, CSV, or a photo of a form. Stored under a
-generated key, deduplicated by content hash per organization, 25 MB cap.
-
-**2. Extract** — into `ProjectExtraction`, a fixed schema where every field
-carries a value, a confidence band, the page it came from and the sentence it
-was taken from. Images go to the model as vision input rather than through a
-separate OCR service: Rules.md already grants the LLM "extracting structured
-data from documents", and it is one fewer hop where a digit can change.
-
-**3. Validate** — deterministic rules over the extracted data. The most
-valuable is the implied capacity factor: capacity and generation come from
-different parts of a document, so a unit error in either is invisible alone and
-obvious once divided.
-
-**4. Review** — only flagged *fields* reach the queue, not whole documents,
-ordered blocking-first. Each shows the extracted value beside the document's
-own sentence, so nobody reopens the PDF. Approve, edit or reject; every
-decision is audited and cannot be reopened.
-
-**5. Assess** — the *Assess* button on an uploaded document. Reviewer
-corrections override extracted values, rejected values are dropped, and
-unresolved blocking items refuse the handover and send you back to the queue.
-Technology strings map through an explicit keyword table with disqualifying
-terms; "solar thermal" is refused rather than matched to solar PV, because CSP
-is not a VMR0017 Table 1 type and the wrong match selects the wrong rules.
-
-**6. Generate** — the model drafts with `{{placeholders}}`; substitution happens
-in Python from engine output. Each section's fallback is the existing
-deterministic clause-cited prose, so with no model configured the report is
-byte-identical to before.
-
-**7. Export** — the filled Verra Project Description as `.docx`, and the
-traceability matrix as CSV.
-
----
-
-## Storage
-
-`STORAGE_BACKEND` selects `local` (default) or `s3`. S3 works with AWS, MinIO,
-Cloudflare R2 or Backblaze via `S3_ENDPOINT_URL`; boto3 is imported lazily so a
-local deployment never needs it installed.
-
-**Keys are generated, never derived from the uploaded filename** —
-`{organization}/{uuid}{suffix}`. A key built from a browser-supplied name is how
-a path traversal becomes an overwrite of another organization's document. The
-original name is kept on the database row for display only.
-
-Local storage is correct for development and wrong for production: the
-application volume is not replicated, and it does not survive a container being
-replaced.
-
----
-
-## Tests
-
-```bash
-pytest -q
-```
-
-Expect `613 passed`. `586 passed, 27 skipped` means Postgres is not reachable —
-endpoint tests skip rather than fail so the domain suite still gives a signal.
-
-### Verifying the suite has teeth
-
-A test that cannot fail manufactures confidence:
-
-```bash
-cp app/api/auth.py /tmp/auth_good.py
-sed -i '' 's/_commit_then_raise(db, _GENERIC_LOGIN_FAILURE)/raise _GENERIC_LOGIN_FAILURE/' app/api/auth.py
-pytest tests/test_endpoints.py -q
-cp /tmp/auth_good.py app/api/auth.py
-pytest tests/test_endpoints.py -q
-```
-
-Expect `5 failed, 22 passed`, then `27 passed`.
-
----
-
-## Layout
-
-```
-app/
-  core/         config, database engine, Argon2 hashing + JWT
-  models/       users, audit_logs, documents, extractions, review_items,
-                historical_reports, report_chunks
-  extraction/   Phase 3 — documents, schema, guards, pipeline
-  validation/   Phase 4 — deterministic rules, flagging, review queue
-  domain/       Phase 2 — calculation engines. No DB, no LLM, no exceptions
-  rag/          Phase 5 — chunking, redaction, pgvector index, retrieval
-  generation/   Phase 6 — narrative drafting, placeholders, report bridge
-  services/     ingestion, handover, storage, docx rendering, auditor, audit
-  api/          FastAPI routers and dependencies
-  templates/    the 13 official Verra v5.0A/5.0B .docx templates
-frontend/       Vite + React interface
-scripts/        create_admin, index_reports
-migrations/     Alembic — the only way the schema changes
-tests/
-```
-
-`app/domain/` is the heart. Nothing in it imports a database session or an API
-client, which is why it can be tested exhaustively and why its results are
-reproducible.
-
----
-
-## Interface
-
-Design.md's palette and sidebar: green `#2E7D32`, Inter, 8px grid.
-
-**Uploads** · **Review queue** · **Compliance register** · **Quantification**
-(the derivation chain) · **Additionality** · **ESG risk** · **Project
-Description** · **Project details**.
-
----
-
-## Regulatory facts that drive the design
-
-Each was found by reading the primary source, and each changed a number that
-looked correct beforehand.
-
-1. **E&I crediting period is 5 years, renewable twice — 15 maximum** (VCS
-   Standard v5.0 s3.8.4, Table 8). Older PDDs assume 7 × 3 = 21.
-2. **VMR0017 s9.1 mandates the embodied emission factor by technology** — solar
-   PV 43, wind 13, geothermal 37, hydro 21, ocean 8 g CO2e/kWh. A lower figure
-   on a 50 MW solar project overstates reductions by roughly 1,600 tCO2e a year.
-3. **Barrier analysis is unavailable under VMR0017** (s5.3.2).
-4. **VMR0017 added embodied-emissions leakage** (eq. 19/20); ACM0002 had no such
-   term, so a migrated PDD will be missing it.
-5. **Additional is not CCP-eligible.** VT0008 s5.4.2(a) establishes
-   additionality; (b) and (c) govern the label, which affects the price.
-6. **Non-permanence risk applies only to carbon sinks** (s3.2.8).
-
----
-
-## Security posture
-
-- Argon2id hashing. Not bcrypt: it truncates silently at 72 bytes.
-- Short-lived access tokens, separate refresh tokens, token type asserted on
-  decode.
-- Every non-public route carries `Depends(get_current_user)`.
-- No self-registration. `scripts/create_admin.py` validates the address with the
-  same rule the login endpoint uses.
-- Login failures return one generic message regardless of cause.
-- Lockout at `MAX_FAILED_LOGINS`; unlock is an audited admin action.
-- `audit_logs` is append-only — no application path updates or deletes a row.
-- **Audit entries record which field was edited and by whom, never the value.**
-  Rules.md forbids raw client financial data in logs.
-- Uploads are extension-gated, size-capped and deduplicated by content hash;
-  storage keys are generated rather than derived from the filename.
-- Cross-organization scoping is covered by endpoint tests.
-- The frontend holds the access token in memory only, never `localStorage`.
-
-### Transaction gotcha — read before touching `api/auth.py`
-
-`get_db()` rolls back on any exception, so an audit row written immediately
-before `raise HTTPException(...)` is **discarded with the failed request**. This
-silently disabled the failure audit trail and account lockout. Every domain test
-passed throughout.
-
-Failure paths call `_commit_then_raise(db, exc)`. Any new route auditing a
-failure must do the same.
-
-The same trap has a second form in tests: a `get_db` override that merely yields
-a session removes the code path where the bug lives, and the suite then passes
-against broken code.
-
----
-
-## Known gaps
-
-1. **Never run against a real model.** See the note at the top. Everything in
-   Phases 3, 4 and 6 rests on assumptions this would test.
-2. **TOOL07 is unverified.** VT0011 replaces specific paragraphs of it, but the
-   core OM/BM/CM equations live there and it was not in the regulations pack.
-   The regulatory registry reports it as a `FAIL` and names the affected
-   functions.
-3. **Four client deliverables outstanding** — see the phase status.
-4. **Nothing is deployed.** `DEPLOY.md` covers VPS, Render, Railway and Fly. No
-   backups, error tracking, log aggregation or staging environment.
-5. **ESG docx rendering not built** — that template's risk rows use dropdown
-   content controls, which need different handling from the PD template.
-6. **Benchmark IRR must be justified** per VT0008 App. 2 sA2.3.
-7. **Annual estimates held flat** — VT0011 para 72 Option 2 wants the build
-   margin updated annually.
-8. **Multi-tenancy is application-layer**, not Postgres RLS.
-9. **The 10% ex-ante/ex-post variance threshold is a house heuristic**, not a
-   VCS requirement, and is labelled as such wherever it surfaces.
-10. **pgvector is a deviation** from Architecture.md's Chroma/Pinecone —
-    deliberate, since Postgres was already running. Worth confirming with the
-    client.
+| 1 — Formulas and golden dataset | Awaiting client |
+| 2 — Calculation engine | Complete |
+| 3 — Extraction pipeline | Complete |
+| 4 — Validation and confidence | Complete |
+| 5 — Historical report index | Built; no corpus supplied |
+| 6 — Report generation | Complete |
+| 7 — Review dashboard | Complete |
+| 8 — Audit trail and export | Complete |
+| 9 — Parallel run | Depends on 1 and 5 |
 
 ---
 
 ## Working notes
 
-**Always read an autogenerated migration before applying it.** PostGIS installs
-dozens of its own tables. `migrations/env.py` filters reflection via
-`include_object`; without it autogenerate proposes dropping all of them.
-
-```bash
-alembic revision --autogenerate -m "message"
-sed -n '/^def upgrade/,/^def downgrade/p' migrations/versions/<new>.py | grep -c drop_table
-alembic upgrade head
-```
-
-**Percent-encoded credentials break Alembic's config parser.** `env.py` builds
-the engine from `settings.database_url` directly rather than through
-`config.set_main_option`, which routes it through `configparser` and chokes on
-`%`. Both this and the `quote_plus` fix in `config.py` have tests, because both
-were lost once to a file overwrite. `render_item` in the same file emits the
-pgvector import that Alembic otherwise omits.
-
-**Verra's template filenames are inconsistently cased** — the Project
-Description ships as `v5.0A`, the Monitoring Report as `V5.0A`. macOS is
-case-insensitive, Linux is not.
-
-**Dry-run any new corpus before indexing it:**
-
-```bash
-PYTHONPATH=. python scripts/index_reports.py <dir> --org "Bodhi Hub" --dry-run
-```
-
-It costs nothing and refuses to proceed if any figure survives redaction.
-
-**Scripts need the project root on the path:** `PYTHONPATH=. python scripts/...`
-
-**In zsh, `#` is not a comment** in interactive shells by default.
-`setopt interactive_comments` fixes it.
+- `PYTHONPATH=.` is needed for scripts.
+- Never run `create_all()` — Alembic only.
+- `migrations/env.py` builds its engine directly rather than using
+  `set_main_option`: configparser chokes on `%` in passwords. Guarded by
+  `tests/test_migrations_env.py`.
+- Verra ships the PD template as `v5.0A` and the MR template as `V5.0A`.
+  Case-sensitive filesystems care.
+- In zsh, `#` is not a comment interactively: `setopt interactive_comments`.

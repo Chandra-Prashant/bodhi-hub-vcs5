@@ -320,3 +320,37 @@ def test_an_out_of_range_return_is_reported_not_silently_dropped():
     result = benchmark_analysis(_inputs(capex=40_000.0, tariff_per_mwh=3_000.0))
     assert result.irr_without_credits is None
     assert any(f.check == "vt0008.irr_out_of_range" for f in result.findings)
+
+
+# --- an unsearched count is not a favourable finding -----------------------
+
+def test_no_search_supplied_is_not_reported_as_not_common_practice():
+    """Zero means somebody looked and found none. None means nobody looked.
+    Reporting the second as "not common practice" turns a missing input into a
+    favourable finding."""
+    from app.domain.additionality import common_practice
+
+    result = common_practice(n_all=None, n_diff=0, project_capacity_mw=50.0)
+    assert not result.assessed
+    assert result.f_factor is None
+    finding = next(f for f in result.findings if f.check == "vt0008.step4")
+    assert finding.severity is Severity.WARNING
+    assert "has not been assessed" in finding.message
+
+
+def test_a_search_that_found_nothing_is_a_real_finding():
+    from app.domain.additionality import common_practice
+
+    result = common_practice(n_all=0, n_diff=0, project_capacity_mw=50.0)
+    assert result.assessed
+    assert result.f_factor == 0.0
+    finding = next(f for f in result.findings if f.check == "vt0008.step4")
+    assert finding.severity is Severity.PASS
+
+
+def test_the_two_cases_are_distinguishable_downstream():
+    from app.domain.additionality import common_practice
+
+    unsearched = common_practice(n_all=None, n_diff=0, project_capacity_mw=50.0)
+    searched = common_practice(n_all=0, n_diff=0, project_capacity_mw=50.0)
+    assert unsearched.assessed is not searched.assessed

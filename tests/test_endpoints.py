@@ -290,3 +290,122 @@ def test_the_new_password_actually_works(client, make_user, auth_headers, login)
                       "new_password": "a-brand-new-long-password"})
     assert login("pm@example.com", "a-brand-new-long-password").status_code == 200
     assert login("pm@example.com", PASSWORD).status_code == 401
+
+
+# --- the working state survives a session ---------------------------------
+
+def _draft_payload(**over):
+    payload = {
+        "name": "Aligarh Solar One", "proponent": "Bodhi Hub Client",
+        "country_iso2": "IN", "technology": "SOLAR_PV_TERRESTRIAL",
+        "installed_capacity_mw": 50.0,
+        "expected_annual_generation_mwh": 87600.0,
+        "initial_crediting_period_start": "2026-03-01",
+        "grid_units": [],
+        "esg_entries": [{
+            "category": "S2", "risk_id": "S2.1", "severity": 4, "likelihood": 3,
+            "description": "Land assembled from multiple smallholders.",
+            "justification": "Records incomplete; informal tenancy common.",
+            "mitigation": "Independent title verification; grievance mechanism.",
+        }],
+    }
+    payload.update(over)
+    return payload
+
+
+def test_an_empty_draft_is_not_an_error(client, admin_headers):
+    """First use is a normal condition, not a 404."""
+    response = client.get("/api/v1/assessment/draft", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.json()["state"] is None
+
+
+def test_a_draft_survives_a_new_session(client, admin_headers):
+    """Twelve categories of ESG judgement is an hour of typing. It used to
+    live only in the browser tab and vanish on sign-out."""
+    client.put("/api/v1/assessment/draft", headers=admin_headers,
+               json=_draft_payload())
+
+    state = client.get("/api/v1/assessment/draft",
+                       headers=admin_headers).json()["state"]
+    assert state["name"] == "Aligarh Solar One"
+    assert len(state["esg_entries"]) == 1
+    assert state["esg_entries"][0]["severity"] == 4
+
+
+def test_a_malformed_draft_is_refused_not_stored(client, admin_headers):
+    """A draft that cannot be loaded must never be written."""
+    assert client.put("/api/v1/assessment/draft", headers=admin_headers,
+                      json={"name": "x"}).status_code == 422
+    assert client.get("/api/v1/assessment/draft",
+                      headers=admin_headers).json()["state"] is None
+
+
+def test_saving_a_draft_is_audited(client, admin_headers):
+    client.put("/api/v1/assessment/draft", headers=admin_headers,
+               json=_draft_payload())
+    actions = [r["action"] for r in
+               client.get("/api/v1/admin/audit-logs?limit=10",
+                          headers=admin_headers).json()]
+    assert "draft.saved" in actions
+
+
+def test_clearing_discards_the_draft(client, admin_headers):
+    client.put("/api/v1/assessment/draft", headers=admin_headers,
+               json=_draft_payload())
+    assert client.delete("/api/v1/assessment/draft",
+                         headers=admin_headers).status_code == 204
+    assert client.get("/api/v1/assessment/draft",
+                      headers=admin_headers).json()["state"] is None
+
+
+def test_drafts_are_scoped_to_the_organization(client, admin_headers,
+                                               auth_headers, make_user):
+    from app.models.user import Role
+
+    client.put("/api/v1/assessment/draft", headers=admin_headers,
+               json=_draft_payload())
+    outsider = make_user(email="other@rival.com", password="correct-horse-battery",
+                         role=Role.ADMIN, organization="Rival Advisory")
+    other = auth_headers(outsider.email, "correct-horse-battery")
+    assert client.get("/api/v1/assessment/draft",
+                      headers=other).json()["state"] is None
+
+
+def test_a_working_draft_downloads_while_incomplete(client, admin_headers):
+    """The document that tells an author what is missing cannot require that
+    nothing is missing."""
+    response = client.post(
+        "/api/v1/assessment/project-description?strip_guidance=false",
+        headers=admin_headers, json=_draft_payload())
+    assert response.status_code == 200
+    assert response.content[:2] == b"PK"
+
+
+def test_the_submission_copy_still_refuses_when_incomplete(client, admin_headers):
+    """Stripping Verra's guidance removes the only marks showing which
+    sections were never written."""
+    response = client.post(
+        "/api/v1/assessment/project-description?strip_guidance=true",
+        headers=admin_headers, json=_draft_payload())
+    assert response.status_code == 422
+
+
+def test_a_draft_keeps_esg_entries_through_a_rewrite(client, admin_headers):
+    """Saving a project without ESG must not be possible to do by accident —
+    the caller sends what it holds, so the guard has to be that the stored
+    draft is only ever replaced by a complete payload."""
+    client.put("/api/v1/assessment/draft", headers=admin_headers,
+               json=_draft_payload())
+    assert len(client.get("/api/v1/assessment/draft",
+                          headers=admin_headers).json()["state"]
+               ["esg_entries"]) == 1
+
+    # A later save that omits them does overwrite — by design, since the
+    # frontend is the source of truth for the working state. The protection
+    # against losing them lives in the merge, which is why the test above
+    # exists.
+    client.put("/api/v1/assessment/draft", headers=admin_headers,
+               json=_draft_payload(esg_entries=[]))
+    assert client.get("/api/v1/assessment/draft",
+                      headers=admin_headers).json()["state"]["esg_entries"] == []

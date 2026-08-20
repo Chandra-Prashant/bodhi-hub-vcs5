@@ -352,3 +352,23 @@ def test_a_field_is_still_never_queued_twice():
                             annual_opex=_f("999999999")))
     names = [i.field_name for i in result.review_items]
     assert len(names) == len(set(names))
+
+
+def test_a_secondary_item_shows_its_own_value_not_the_comparison():
+    """The flag's observed string describes the failed comparison, which is
+    right on the field the rule is registered under and useless on the others.
+    A reviewer correcting the tariff needs to see the tariff."""
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("3000"),
+                            annual_opex=_f("500")))
+    primary = next(i for i in result.review_items if i.field_name == "capex")
+    tariff = next(i for i in result.review_items
+                  if i.field_name == "tariff_per_mwh")
+    assert "vs net revenue" in primary.observed
+    assert tariff.observed == "3000"
+
+
+def test_a_secondary_item_keeps_its_own_source_text():
+    result = validate(_data(capex=_f("40000"), tariff_per_mwh=_f("3000")))
+    tariff = next(i for i in result.review_items
+                  if i.field_name == "tariff_per_mwh")
+    assert "3000" in tariff.source_text

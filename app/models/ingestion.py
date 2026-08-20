@@ -48,10 +48,20 @@ class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
         Index("ix_documents_org_created", "organization", "created_at"),
-        # Same file uploaded twice in one organization is the same document.
-        Index("ix_documents_org_hash", "organization", "content_hash",
+        Index("ix_documents_project_created", "project_id", "created_at"),
+        # Same file uploaded twice into the SAME PROJECT is the same document.
+        # Deliberately scoped to the project, not the organisation: the same
+        # grid study can legitimately support two projects, and refusing the
+        # second upload would force a rename to work around it.
+        Index("ix_documents_project_hash", "project_id", "content_hash",
               unique=True),
     )
+
+    # Nullable only so the migration can run against existing rows. Every new
+    # document has one; the upload route requires it.
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True, index=True)
 
     filename: Mapped[str] = mapped_column(String(500), nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -15,10 +15,13 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.database import get_db
 from app.domain.additionality import FinancialInputs, assess_additionality
 from app.domain.baseline import ProjectEmissions, emission_reductions
 from app.domain.classification import ProjectIntake, classify
@@ -36,6 +39,9 @@ from app.domain.esg import (
 from app.domain.monitoring import build_monitoring_parameters
 from app.domain.pdd_content import ProjectIdentity, build_pdd_content
 from app.domain.regulatory import check_registry
+from app.models.draft import ProjectDraft
+from app.models.user import User
+from app.services import audit as audit_log
 from app.schemas.assessment import AssessmentRequest, AssessmentResponse
 from app.services.auditor import audit
 from app.services.pdd_builder import build_pdd
@@ -215,7 +221,9 @@ def document_status(
 def project_description(
     payload: AssessmentRequest,
     strip_guidance: bool = False,
-    allow_incomplete: bool = False,
+    # None means "decide from strip_guidance" — see below. An explicit value
+    # still overrides, so a caller can force either behaviour.
+    allow_incomplete: bool | None = None,
     _user=Depends(get_current_user),
 ):
     """Render the Project Description as a .docx.
@@ -224,6 +232,18 @@ def project_description(
     eligibility or additionality that the engine has rejected must not leave
     the system, whatever the caller asks for.
     """
+    # A working draft is expected to be incomplete — that is what it is for.
+    # Refusing to produce it until every finding clears means the one document
+    # that tells an author what is still missing cannot be produced until
+    # nothing is missing.
+    #
+    # The submission copy is different. Stripping Verra's guidance from an
+    # unfinished document removes the only marks showing which sections were
+    # never written, and produces something that looks ready when it is not.
+    # That one still refuses.
+    if allow_incomplete is None:
+        allow_incomplete = not strip_guidance
+
     content = _pdd_content(payload)
     if content.blocked and not allow_incomplete:
         raise HTTPException(
@@ -271,6 +291,86 @@ def esg_schema(_user=Depends(get_current_user)) -> dict:
             for severity, row in RISK_MATRIX.items()
         },
     }
+
+
+@router.get("/draft")
+def read_draft(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """The organisation's saved working state, or an empty one.
+
+    Returns 200 with state=None rather than 404 when nothing is saved: an
+    empty draft is a normal condition on first use, not an error, and the
+    frontend should not have to treat it as one.
+    """
+    draft = db.scalar(
+        select(ProjectDraft).where(ProjectDraft.organization == user.organization))
+    if draft is None:
+        return {"state": None, "label": "", "updated_at": None}
+    return {
+        "state": draft.state,
+        "label": draft.label,
+        "updated_at": draft.updated_at.isoformat(),
+    }
+
+
+@router.put("/draft")
+def write_draft(
+    payload: AssessmentRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Save the working state.
+
+    The payload is validated as a full AssessmentRequest before it is stored,
+    so a draft that cannot be loaded can never be written. Saving a draft is
+    not running an assessment — nothing is calculated here.
+    """
+    state = payload.model_dump(mode="json")
+    label = payload.name or ""
+
+    draft = db.scalar(
+        select(ProjectDraft).where(ProjectDraft.organization == user.organization))
+    if draft is None:
+        draft = ProjectDraft(organization=user.organization)
+        db.add(draft)
+
+    draft.state = state
+    draft.label = label
+    draft.updated_by = user.id
+    db.flush()
+
+    audit_log.record(
+        db, action="draft.saved", outcome=audit_log.SUCCESS,
+        actor_email=user.email, organization=user.organization,
+        user_id=user.id, resource_type="project_draft",
+        resource_id=str(draft.id), request=request,
+        detail={"label": label,
+                "esg_entries": len(payload.esg_entries)})
+    db.flush()
+    return {"saved": True, "updated_at": draft.updated_at.isoformat()}
+
+
+@router.delete("/draft", status_code=status.HTTP_204_NO_CONTENT)
+def clear_draft(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Discard the working state. Clear in the interface calls this."""
+    draft = db.scalar(
+        select(ProjectDraft).where(ProjectDraft.organization == user.organization))
+    if draft is not None:
+        db.delete(draft)
+        audit_log.record(
+            db, action="draft.cleared", outcome=audit_log.SUCCESS,
+            actor_email=user.email, organization=user.organization,
+            user_id=user.id, resource_type="project_draft",
+            resource_id=str(draft.id), request=request)
+        db.flush()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/esg-review")

@@ -119,13 +119,20 @@ def validate(data: ProjectExtraction) -> ValidationResult:
                 continue
             flagged_fields.add(name)
             source = getattr(data, name, None)
+            # Each item shows ITS OWN extracted value. The flag's `observed`
+            # string describes the comparison that failed ("capex 40000 vs net
+            # revenue 262799500/yr"), which is the right context on the field
+            # the rule is registered under and useless on the others — a
+            # reviewer correcting the tariff needs to see the tariff.
+            own_value = getattr(source, "value", None) if source else None
             result.review_items.append(ReviewItem(
                 field_name=name,
                 reason=(flag.message if index == 0 else
                         f"Involved in the same finding as {flag.field_name}. "
                         f"{flag.message}"),
                 severity=flag.severity,
-                observed=flag.observed,
+                observed=(flag.observed if index == 0
+                          else ("" if own_value is None else str(own_value))),
                 source_text=getattr(source, "source_text", "") if source else "",
                 source_page=getattr(source, "source_page", None) if source else None,
                 rule_id=flag.rule_id,
